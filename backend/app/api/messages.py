@@ -1,5 +1,6 @@
 from __future__ import annotations
 import uuid
+import structlog
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,6 +12,8 @@ from app.models.message import Message
 from app.models.ticket import Ticket, TicketPriority, TicketStatus
 from app.models.user import User
 from app.core.config import settings
+
+logger = structlog.get_logger()
 
 router = APIRouter(prefix="/messages", tags=["messages"])
 
@@ -170,8 +173,7 @@ async def send_reply(
 
     resend_key = settings.RESEND_API_KEY
     if not resend_key or not resend_key.startswith("re_"):
-        import structlog
-        structlog.get_logger().info(
+        logger.info(
             "reply_email_skipped_no_key",
             to=msg.email,
             customer=msg.name,

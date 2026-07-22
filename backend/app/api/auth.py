@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -142,7 +142,7 @@ async def reset_password(body: ResetPasswordRequest, db: AsyncSession = Depends(
     if not user or not user.reset_token_expires:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    if user.reset_token_expires.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+    if user.reset_token_expires < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
     user.hashed_password = hash_password(body.new_password)
