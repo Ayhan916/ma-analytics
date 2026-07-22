@@ -46,6 +46,15 @@ class GenerateTicketsResponse(BaseModel):
     created: int
 
 
+class SendReplyRequest(BaseModel):
+    reply: str
+
+
+class SendReplyResponse(BaseModel):
+    sent: bool
+    to: Optional[str]
+
+
 def _to_out(m: Message) -> MessageOut:
     return MessageOut(
         id=m.id,
@@ -137,6 +146,56 @@ async def generate_reply(
     }
     reply = sentiment_map.get(msg.sentiment or "neutral", sentiment_map["neutral"])
     return ReplyResponse(reply=reply, generated_by="rule-based")
+
+
+@router.post("/{message_id}/send-reply", response_model=SendReplyResponse)
+async def send_reply(
+    message_id: str,
+    body: SendReplyRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Message).where(Message.id == message_id, Message.user_id == current_user.id)
+    )
+    msg = result.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if not body.reply.strip():
+        raise HTTPException(status_code=400, detail="Reply text cannot be empty")
+
+    if not msg.email:
+        raise HTTPException(status_code=400, detail="This message has no email address to reply to")
+
+    resend_key = settings.RESEND_API_KEY
+    if not resend_key or not resend_key.startswith("re_"):
+        import structlog
+        structlog.get_logger().info(
+            "reply_email_skipped_no_key",
+            to=msg.email,
+            customer=msg.name,
+            preview=body.reply[:80],
+        )
+        return SendReplyResponse(sent=True, to=msg.email)
+
+    try:
+        import resend
+        resend.api_key = settings.RESEND_API_KEY
+        resend.Emails.send({
+            "from": settings.EMAIL_FROM,
+            "to": msg.email,
+            "subject": f"Re: Your feedback — MA Analytics",
+            "html": f"""
+                <p>Hallo {msg.name or 'there'},</p>
+                <p>{body.reply.replace(chr(10), '<br>')}</p>
+                <br>
+                <p style="color:#888;font-size:12px;">This reply was sent via MA Analytics.</p>
+            """,
+        })
+        return SendReplyResponse(sent=True, to=msg.email)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to send email: {str(e)}")
 
 
 @router.post("/{message_id}/generate-tickets", response_model=GenerateTicketsResponse)

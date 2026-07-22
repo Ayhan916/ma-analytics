@@ -88,7 +88,10 @@ export function InboxPage() {
   const [reply, setReply] = useState('')
   const [loadingReply, setLoadingReply] = useState(false)
   const [loadingTickets, setLoadingTickets] = useState(false)
+  const [loadingSend, setLoadingSend] = useState(false)
   const [ticketsCreated, setTicketsCreated] = useState<number | null>(null)
+  const [replySent, setReplySent] = useState(false)
+  const [sendError, setSendError] = useState('')
 
   const load = async () => {
     const list = await messagesApi.list().catch(() => [])
@@ -102,16 +105,31 @@ export function InboxPage() {
   useEffect(() => { load() }, [])
 
   const handleSelect = (m: Message) => {
-    setSelected(m); setReply(''); setTicketsCreated(null)
+    setSelected(m); setReply(''); setTicketsCreated(null); setReplySent(false); setSendError('')
   }
 
   const handleGenerateReply = async () => {
     if (!selected) return
     setLoadingReply(true)
+    setReplySent(false)
+    setSendError('')
     try {
       const res = await messagesApi.generateReply(selected.id)
       setReply(res.reply)
     } finally { setLoadingReply(false) }
+  }
+
+  const handleSendReply = async () => {
+    if (!selected || !reply.trim()) return
+    setLoadingSend(true)
+    setSendError('')
+    try {
+      await messagesApi.sendReply(selected.id, reply)
+      setReplySent(true)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setSendError(msg ?? 'Senden fehlgeschlagen. Bitte erneut versuchen.')
+    } finally { setLoadingSend(false) }
   }
 
   const handleGenerateTickets = async () => {
@@ -197,9 +215,37 @@ export function InboxPage() {
               {reply && (
                 <div>
                   <p className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-2">Suggested Reply</p>
-                  <div className="bg-slate-900 border border-indigo-500/20 rounded-xl p-4">
-                    <p className="text-slate-300 text-sm leading-relaxed">{reply}</p>
-                  </div>
+                  <textarea
+                    value={reply}
+                    onChange={e => { setReply(e.target.value); setReplySent(false) }}
+                    rows={5}
+                    className="w-full bg-slate-900 border border-indigo-500/20 rounded-xl p-4 text-slate-300 text-sm leading-relaxed focus:outline-none focus:border-indigo-500 resize-none"
+                  />
+                  {sendError && (
+                    <div className="mt-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-red-400 text-xs">
+                      {sendError}
+                    </div>
+                  )}
+                  {replySent ? (
+                    <div className="mt-2 flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-emerald-400 text-sm">
+                      <Send size={13} />
+                      Antwort gesendet{selected?.email ? ` an ${selected.email}` : ''}
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex items-center justify-between">
+                      {!selected?.email && (
+                        <p className="text-slate-500 text-xs">Keine E-Mail-Adresse hinterlegt — Senden nicht möglich</p>
+                      )}
+                      <button
+                        onClick={handleSendReply}
+                        disabled={loadingSend || !reply.trim() || !selected?.email}
+                        className="ml-auto flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        {loadingSend ? <RefreshCw size={13} className="animate-spin" /> : <Send size={13} />}
+                        Antwort senden
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -90,7 +90,7 @@ class ResetPasswordRequest(BaseModel):
 
 async def _send_reset_email(email: str, token: str) -> None:
     reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-    if not settings.RESEND_API_KEY:
+    if not settings.RESEND_API_KEY or not settings.RESEND_API_KEY.startswith("re_"):
         logger.info("password_reset_link", email=email, url=reset_url)
         return
     try:

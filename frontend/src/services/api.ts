@@ -122,4 +122,8 @@ export const messagesApi = {
     const { data } = await apiClient.post(`/messages/${id}/generate-tickets`)
     return data
   },
+  sendReply: async (id: string, reply: string) => {
+    const { data } = await apiClient.post(`/messages/${id}/send-reply`, { reply })
+    return data
+  },
 }
