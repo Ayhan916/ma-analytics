@@ -117,6 +117,7 @@ export function DataSourcesPage() {
   }
 
   const handleRetry = async (id: string) => {
+    setError('')
     try {
       await datasourceApi.retry(id)
       await load()

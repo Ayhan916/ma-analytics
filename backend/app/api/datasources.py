@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.datasource import DataSource, DataSourceType
@@ -219,10 +219,14 @@ async def retry_pipeline(
         raise HTTPException(status_code=409, detail="Pipeline is already running")
 
     # Count existing reviews to decide which task to dispatch
-    review_result = await db.execute(
-        select(Review).where(Review.datasource_id == ds.id)
+    count_result = await db.execute(
+        select(func.count()).select_from(Review).where(Review.datasource_id == ds.id)
     )
-    review_count = len(review_result.scalars().all())
+    review_count = count_result.scalar()
+
+    # Validate before creating the job — CSV without reviews cannot be retried
+    if review_count == 0 and not ds.app_id:
+        raise HTTPException(status_code=400, detail="Cannot retry CSV source without existing reviews")
 
     new_job = PipelineJob(
         id=str(uuid.uuid4()),
@@ -234,13 +238,9 @@ async def retry_pipeline(
     await db.commit()
 
     if review_count > 0:
-        # Reviews already in DB — re-run ML pipeline only (no re-scraping)
         from app.pipeline.tasks import run_pipeline
         run_pipeline.delay(new_job.id, ds.id)
     else:
-        # No reviews yet — need to scrape again
-        if not ds.app_id:
-            raise HTTPException(status_code=400, detail="Cannot retry CSV source without existing reviews")
         from app.pipeline.tasks import scrape_and_run
         scrape_and_run.delay(new_job.id, ds.id, ds.app_id, 200, "de", "de")
 
