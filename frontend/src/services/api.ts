@@ -16,6 +16,14 @@ export const authApi = {
     const { data } = await axios.get(`${BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
     return data
   },
+  forgotPassword: async (email: string) => {
+    const { data } = await axios.post(`${BASE}/auth/forgot-password`, { email })
+    return data
+  },
+  resetPassword: async (token: string, new_password: string) => {
+    const { data } = await axios.post(`${BASE}/auth/reset-password`, { token, new_password })
+    return data
+  },
 }
 
 // Authenticated client

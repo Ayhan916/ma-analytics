@@ -1,20 +1,23 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 export function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  const resetSuccess = searchParams.get('reset') === 'success'
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(''); setLoading(true)
     try { await login(email, password); navigate('/') }
-    catch { setError('Invalid email or password') }
+    catch { setError('Ungültige E-Mail oder falsches Passwort.') }
     finally { setLoading(false) }
   }
 
@@ -26,23 +29,37 @@ export function LoginPage() {
             <span className="text-white font-bold text-sm">MA</span>
           </div>
           <h1 className="text-white text-2xl font-bold">MA Analytics</h1>
-          <p className="text-slate-400 text-sm mt-1">Sign in to your account</p>
+          <p className="text-slate-400 text-sm mt-1">Bei deinem Konto anmelden</p>
         </div>
         <form onSubmit={submit} className="bg-slate-900 rounded-xl border border-white/10 p-6 space-y-4">
-          {error && <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-red-400 text-sm">{error}</div>}
+          {resetSuccess && (
+            <div className="bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2 text-green-400 text-sm">
+              Passwort erfolgreich geändert. Du kannst dich jetzt anmelden.
+            </div>
+          )}
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-red-400 text-sm">
+              {error}
+            </div>
+          )}
           <div>
-            <label className="block text-slate-400 text-sm mb-1">Email</label>
+            <label className="block text-slate-400 text-sm mb-1">E-Mail</label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)} required className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
           </div>
           <div>
-            <label className="block text-slate-400 text-sm mb-1">Password</label>
+            <label className="block text-slate-400 text-sm mb-1 flex justify-between">
+              <span>Passwort</span>
+              <Link to="/forgot-password" className="text-indigo-400 hover:text-indigo-300 font-normal">
+                Vergessen?
+              </Link>
+            </label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} required className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
           </div>
           <button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg py-2 text-sm font-medium transition-colors">
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading ? 'Anmelden...' : 'Anmelden'}
           </button>
           <p className="text-center text-slate-500 text-sm">
-            No account? <Link to="/register" className="text-indigo-400 hover:text-indigo-300">Register</Link>
+            Kein Konto? <Link to="/register" className="text-indigo-400 hover:text-indigo-300">Registrieren</Link>
           </p>
         </form>
       </div>

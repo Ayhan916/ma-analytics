@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = ""
     RESEND_API_KEY: str = ""
+    FRONTEND_URL: str = "http://localhost:3002"
+    EMAIL_FROM: str = "noreply@ma-analytics.app"
 
     class Config:
         env_file = ".env"
