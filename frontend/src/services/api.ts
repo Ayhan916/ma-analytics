@@ -62,6 +62,10 @@ export const datasourceApi = {
   delete: async (id: string) => {
     await apiClient.delete(`/datasources/${id}`)
   },
+  retry: async (id: string) => {
+    const { data } = await apiClient.post(`/datasources/${id}/retry`)
+    return data
+  },
 }
 
 // Jobs

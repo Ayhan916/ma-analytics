@@ -10,6 +10,7 @@ interface DataSource {
   app_id: string | null
   job_id: string | null
   job_status: string | null
+  job_error: string | null
   review_count: number
   last_synced: string | null
 }
@@ -115,6 +116,16 @@ export function DataSourcesPage() {
     try { await datasourceApi.delete(id); await load() } catch {}
   }
 
+  const handleRetry = async (id: string) => {
+    try {
+      await datasourceApi.retry(id)
+      await load()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'Retry failed. Please try again.')
+    }
+  }
+
   return (
     <AppShell>
       <div className="p-6 max-w-4xl mx-auto">
@@ -129,27 +140,43 @@ export function DataSourcesPage() {
             <h2 className="text-slate-300 text-sm font-semibold uppercase tracking-wider mb-3">Connected Sources</h2>
             <div className="space-y-2">
               {sources.map(ds => (
-                <div key={ds.id} className="flex items-center justify-between bg-slate-900 border border-white/10 rounded-xl px-4 py-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
-                      <Search size={14} className="text-indigo-400" />
+                <div key={ds.id} className={`bg-slate-900 border rounded-xl px-4 py-3 ${ds.job_status === 'failed' ? 'border-red-500/30' : 'border-white/10'}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                        <Search size={14} className="text-indigo-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-white text-sm font-medium truncate">{ds.name}</p>
+                        <p className="text-slate-500 text-xs">{ds.app_id || 'CSV'} · {ds.review_count} reviews</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-white text-sm font-medium truncate">{ds.name}</p>
-                      <p className="text-slate-500 text-xs">{ds.app_id || 'CSV'} · {ds.review_count} reviews</p>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <StatusBadge status={ds.job_status} />
+                      {ds.last_synced && (
+                        <span className="text-slate-500 text-xs hidden sm:block">
+                          {new Date(ds.last_synced).toLocaleDateString()}
+                        </span>
+                      )}
+                      {ds.job_status === 'failed' && (
+                        <button
+                          onClick={() => handleRetry(ds.id)}
+                          className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/20 px-2 py-1 rounded-lg transition-colors"
+                        >
+                          <RefreshCw size={11} />
+                          Retry
+                        </button>
+                      )}
+                      <button onClick={() => handleDelete(ds.id)} className="text-slate-600 hover:text-red-400 transition-colors">
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <StatusBadge status={ds.job_status} />
-                    {ds.last_synced && (
-                      <span className="text-slate-500 text-xs hidden sm:block">
-                        {new Date(ds.last_synced).toLocaleDateString()}
-                      </span>
-                    )}
-                    <button onClick={() => handleDelete(ds.id)} className="text-slate-600 hover:text-red-400 transition-colors">
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
+                  {ds.job_status === 'failed' && ds.job_error && (
+                    <div className="mt-2 ml-11 text-red-400 text-xs bg-red-500/5 border border-red-500/10 rounded-lg px-3 py-1.5">
+                      {ds.job_error}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
