@@ -78,14 +78,24 @@ def _detect_sentiment(text: str) -> str:
         return "neutral"
 
 
+VALID_SENTIMENTS = ["positive", "neutral", "negative"]
+
+
 @router.get("", response_model=list[MessageOut])
 async def list_messages(
+    sentiment: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Message).where(Message.user_id == current_user.id).order_by(desc(Message.created_at))
-    )
+    if sentiment and sentiment not in VALID_SENTIMENTS:
+        raise HTTPException(status_code=400, detail=f"Invalid sentiment. Must be one of: {', '.join(VALID_SENTIMENTS)}")
+
+    q = select(Message).where(Message.user_id == current_user.id)
+    if sentiment:
+        q = q.where(Message.sentiment == sentiment)
+    q = q.order_by(desc(Message.created_at))
+
+    result = await db.execute(q)
     return [_to_out(m) for m in result.scalars().all()]
 
 

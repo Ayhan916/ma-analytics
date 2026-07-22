@@ -3,6 +3,15 @@ import { AppShell } from '../components/AppShell'
 import { messagesApi } from '../services/api'
 import { Plus, Send, Ticket, RefreshCw, Smile, Meh, Frown, X } from 'lucide-react'
 
+type SentimentFilter = 'all' | 'positive' | 'neutral' | 'negative'
+
+const FILTER_TABS: { value: SentimentFilter; label: string; icon: React.ReactNode }[] = [
+  { value: 'all',      label: 'All',      icon: null },
+  { value: 'negative', label: 'Negative', icon: <Frown size={11} /> },
+  { value: 'neutral',  label: 'Neutral',  icon: <Meh size={11} /> },
+  { value: 'positive', label: 'Positive', icon: <Smile size={11} /> },
+]
+
 interface Message {
   id: string
   name: string | null
@@ -83,6 +92,7 @@ function NewMessageModal({ onClose, onCreated }: { onClose: () => void; onCreate
 
 export function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([])
+  const [filter, setFilter] = useState<SentimentFilter>('all')
   const [selected, setSelected] = useState<Message | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [reply, setReply] = useState('')
@@ -93,16 +103,13 @@ export function InboxPage() {
   const [replySent, setReplySent] = useState(false)
   const [sendError, setSendError] = useState('')
 
-  const load = async () => {
-    const list = await messagesApi.list().catch(() => [])
+  const load = async (sentimentFilter: SentimentFilter) => {
+    const sentiment = sentimentFilter === 'all' ? undefined : sentimentFilter
+    const list = await messagesApi.list(sentiment).catch(() => [])
     setMessages(list)
-    if (selected) {
-      const updated = list.find((m: Message) => m.id === selected.id)
-      if (updated) setSelected(updated)
-    }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(filter) }, [filter])
 
   const handleSelect = (m: Message) => {
     setSelected(m); setReply(''); setTicketsCreated(null); setReplySent(false); setSendError('')
@@ -152,6 +159,24 @@ export function InboxPage() {
               className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-1 rounded-lg transition-colors">
               <Plus size={12} />New
             </button>
+          </div>
+          <div className="flex gap-1 px-3 py-2 border-b border-white/10">
+            {FILTER_TABS.map(tab => (
+              <button
+                key={tab.value}
+                onClick={() => { setFilter(tab.value); setSelected(null) }}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
+                  ${filter === tab.value
+                    ? tab.value === 'negative' ? 'bg-red-500/20 text-red-400'
+                      : tab.value === 'positive' ? 'bg-emerald-500/20 text-emerald-400'
+                      : tab.value === 'neutral' ? 'bg-slate-500/20 text-slate-300'
+                      : 'bg-white/10 text-white'
+                    : 'text-slate-500 hover:text-slate-300'
+                  }`}
+              >
+                {tab.icon}{tab.label}
+              </button>
+            ))}
           </div>
           <div className="flex-1 overflow-y-auto">
             {messages.length === 0 ? (
@@ -256,7 +281,7 @@ export function InboxPage() {
       {showNew && (
         <NewMessageModal
           onClose={() => setShowNew(false)}
-          onCreated={m => { setMessages(prev => [m, ...prev]); setSelected(m) }}
+          onCreated={m => { setSelected(m); load(filter) }}
         />
       )}
     </AppShell>
