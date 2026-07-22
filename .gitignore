@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment — never commit secrets
+.env
+.env.local
+.env.production
+
+# Node
+node_modules/
+frontend/dist/
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# ML model cache (large binary files)
+*.bin
+*.safetensors
+.cache/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Docker volumes
+pgdata/
