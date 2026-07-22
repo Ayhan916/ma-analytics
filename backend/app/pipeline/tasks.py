@@ -133,6 +133,17 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
     try:
         _update_job(db, job_id, JobStatus.running, "scraping")
 
+        ds = db.query(DataSource).filter(DataSource.id == datasource_id).first()
+        cutoff = ds.last_synced if ds else None
+
+        # Load existing external_ids for dedup
+        existing_ids: set[str] = {
+            row.external_id
+            for row in db.query(Review.external_id)
+            .filter(Review.datasource_id == datasource_id, Review.external_id.isnot(None))
+            .all()
+        }
+
         from google_play_scraper import reviews as gplay_reviews, Sort
         result, _ = gplay_reviews(
             app_id,
@@ -144,20 +155,33 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
 
         _update_job(db, job_id, JobStatus.running, "saving_reviews")
         for r in result:
+            ext_id = r.get("reviewId")
+
+            # Skip reviews already in DB
+            if ext_id and ext_id in existing_ids:
+                continue
+
+            # Skip reviews older than last_synced (incremental cutoff)
+            review_date = r.get("at")
+            if cutoff and review_date and review_date <= cutoff:
+                continue
+
             content = (r.get("content") or "").strip()
             if not content:
                 continue
+
             review = Review(
                 id=str(uuid.uuid4()),
                 datasource_id=datasource_id,
+                external_id=ext_id,
                 content=content,
                 score=r.get("score"),
                 version=r.get("reviewCreatedVersion"),
-                reviewed_at=r.get("at"),
+                reviewed_at=review_date,
             )
             db.add(review)
-        db.commit()
 
+        db.commit()
         _run_ml_pipeline(db, job_id, datasource_id)
 
     except Exception as exc:
