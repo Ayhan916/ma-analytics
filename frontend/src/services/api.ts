@@ -2,43 +2,77 @@ import axios from 'axios'
 
 const BASE = '/api'
 
-// Auth — plain axios (no interceptors)
+// Auth axios — no response interceptor to avoid redirect loops during refresh
+const authAxios = axios.create({ baseURL: BASE, withCredentials: true })
+
 export const authApi = {
   login: async (email: string, password: string) => {
-    const { data } = await axios.post(`${BASE}/auth/login`, { email, password })
+    const { data } = await authAxios.post('/auth/login', { email, password })
     return data
   },
   register: async (email: string, password: string, full_name?: string) => {
-    const { data } = await axios.post(`${BASE}/auth/register`, { email, password, full_name })
+    const { data } = await authAxios.post('/auth/register', { email, password, full_name })
     return data
   },
-  me: async (token: string) => {
-    const { data } = await axios.get(`${BASE}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+  me: async () => {
+    const { data } = await authAxios.get('/auth/me')
     return data
+  },
+  refresh: async () => {
+    const { data } = await authAxios.post('/auth/refresh')
+    return data
+  },
+  logout: async () => {
+    await authAxios.post('/auth/logout')
   },
   forgotPassword: async (email: string) => {
-    const { data } = await axios.post(`${BASE}/auth/forgot-password`, { email })
+    const { data } = await authAxios.post('/auth/forgot-password', { email })
     return data
   },
   resetPassword: async (token: string, new_password: string) => {
-    const { data } = await axios.post(`${BASE}/auth/reset-password`, { token, new_password })
+    const { data } = await authAxios.post('/auth/reset-password', { token, new_password })
     return data
+  },
+  deleteAccount: async () => {
+    await apiClient.delete('/auth/me')
   },
 }
 
-// Authenticated client
-export const apiClient = axios.create({ baseURL: BASE })
+// Authenticated client — sends cookies automatically, handles silent refresh
+export const apiClient = axios.create({ baseURL: BASE, withCredentials: true })
 
-apiClient.interceptors.request.use(config => {
-  const token = localStorage.getItem('token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
+let isRefreshing = false
+let failedQueue: Array<{ resolve: () => void; reject: (err: unknown) => void }> = []
+
+const processQueue = (error: unknown) => {
+  failedQueue.forEach(p => (error ? p.reject(error) : p.resolve()))
+  failedQueue = []
+}
 
 apiClient.interceptors.response.use(
   r => r,
-  err => {
-    if (err.response?.status === 401) { localStorage.removeItem('token'); window.location.href = '/login' }
+  async err => {
+    const original = err.config
+    if (err.response?.status === 401 && !original._retry) {
+      if (isRefreshing) {
+        return new Promise<void>((resolve, reject) => {
+          failedQueue.push({ resolve, reject })
+        }).then(() => apiClient(original))
+      }
+      original._retry = true
+      isRefreshing = true
+      try {
+        await authAxios.post('/auth/refresh')
+        processQueue(null)
+        return apiClient(original)
+      } catch (refreshErr) {
+        processQueue(refreshErr)
+        window.location.href = '/login'
+        return Promise.reject(refreshErr)
+      } finally {
+        isRefreshing = false
+      }
+    }
     return Promise.reject(err)
   }
 )
@@ -110,8 +144,9 @@ export const ticketsApi = {
 
 // Messages
 export const messagesApi = {
-  list: async () => {
-    const { data } = await apiClient.get('/messages')
+  list: async (sentiment?: string) => {
+    const q = sentiment ? `?sentiment=${sentiment}` : ''
+    const { data } = await apiClient.get(`/messages${q}`)
     return data
   },
   create: async (payload: { name?: string; email?: string; text: string }) => {
