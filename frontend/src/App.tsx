@@ -9,6 +9,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { DataSourcesPage } from './pages/DataSourcesPage'
 import { InboxPage } from './pages/InboxPage'
 import { KanbanPage } from './pages/KanbanPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 export default function App() {
   return (
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/datasources" element={<ProtectedRoute><DataSourcesPage /></ProtectedRoute>} />
           <Route path="/inbox" element={<ProtectedRoute><InboxPage /></ProtectedRoute>} />
           <Route path="/kanban" element={<ProtectedRoute><KanbanPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
