@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, JSON, Enum
+from sqlalchemy import String, DateTime, Integer, ForeignKey, Text, JSON, Enum, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 import enum
@@ -14,6 +14,9 @@ class ClusterType(str, enum.Enum):
 
 class Cluster(Base):
     __tablename__ = "clusters"
+    __table_args__ = (
+        Index("ix_clusters_datasource_id", "datasource_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     datasource_id: Mapped[str] = mapped_column(String, ForeignKey("datasources.id"), nullable=False)

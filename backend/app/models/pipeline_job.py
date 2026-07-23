@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Text, Integer, Enum
+from sqlalchemy import String, DateTime, ForeignKey, Text, Integer, Enum, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 import enum
@@ -16,6 +16,9 @@ class JobStatus(str, enum.Enum):
 
 class PipelineJob(Base):
     __tablename__ = "pipeline_jobs"
+    __table_args__ = (
+        Index("ix_pipeline_jobs_datasource_created", "datasource_id", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     datasource_id: Mapped[str] = mapped_column(String, ForeignKey("datasources.id"), nullable=False)
