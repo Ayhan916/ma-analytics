@@ -3,10 +3,17 @@
 Hybrid search uses Reciprocal Rank Fusion to combine pgvector cosine similarity
 with PostgreSQL tsvector full-text search. RRF score = 1/(k + rank_vector) + 1/(k + rank_fulltext),
 where k=60 is the standard constant that down-weights low-ranked results.
+
+Supported filters (combinable):
+  sentiment  — positive | neutral | negative
+  date_from  — ISO date string, e.g. "2024-01-01"
+  date_to    — ISO date string, e.g. "2024-12-31"
+  version    — exact app version string, e.g. "4.2.1"
 """
 from __future__ import annotations
 
 import structlog
+from datetime import date
 from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -22,9 +29,7 @@ from app.core.config import settings
 router = APIRouter(prefix="/search", tags=["search"])
 log = structlog.get_logger(__name__)
 
-# RRF constant — 60 is the standard value from the original RRF paper
 _RRF_K = 60
-# How many candidates to pull from each retriever before fusing
 _RETRIEVER_LIMIT_MULTIPLIER = 5
 
 
@@ -51,6 +56,9 @@ class AskRequest(BaseModel):
     datasource_id: str
     limit: int = 10
     sentiment_filter: Optional[str] = None
+    date_from: Optional[date] = None
+    date_to: Optional[date] = None
+    version: Optional[str] = None
     search_type: Literal["hybrid", "vector", "fulltext"] = "hybrid"
 
 
@@ -67,10 +75,40 @@ def _embed_query(query: str) -> list[float]:
     return model.encode([query], normalize_embeddings=True)[0].tolist()
 
 
-def _sentiment_clause(sentiment: Optional[str], alias: str = "r") -> str:
+def _build_filter_clauses(
+    sentiment: Optional[str],
+    date_from: Optional[date],
+    date_to: Optional[date],
+    version: Optional[str],
+    alias: str = "r",
+) -> tuple[str, dict]:
+    """Build WHERE clause fragments and bind params for metadata filters.
+
+    Returns (sql_fragment, params_dict) — sql_fragment starts with AND or is empty.
+    """
+    clauses: list[str] = []
+    params: dict = {}
+
     if sentiment in ("positive", "neutral", "negative"):
-        return f"AND {alias}.sentiment = '{sentiment}'"
-    return ""
+        clauses.append(f"{alias}.sentiment = :sentiment")
+        params["sentiment"] = sentiment
+
+    if date_from is not None:
+        clauses.append(f"{alias}.reviewed_at >= :date_from")
+        params["date_from"] = date_from.isoformat()
+
+    if date_to is not None:
+        clauses.append(f"{alias}.reviewed_at < :date_to_exclusive")
+        # +1 day so date_to is inclusive
+        from datetime import timedelta
+        params["date_to_exclusive"] = (date_to + timedelta(days=1)).isoformat()
+
+    if version:
+        clauses.append(f"{alias}.version = :version")
+        params["version"] = version
+
+    fragment = ("AND " + " AND ".join(clauses)) if clauses else ""
+    return fragment, params
 
 
 async def _vector_search(
@@ -79,9 +117,11 @@ async def _vector_search(
     query_embedding: list[float],
     limit: int,
     sentiment: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    version: Optional[str] = None,
 ) -> list[SearchResult]:
-    """Pure semantic search via pgvector cosine distance."""
-    sent = _sentiment_clause(sentiment)
+    filter_sql, filter_params = _build_filter_clauses(sentiment, date_from, date_to, version)
     sql = text(f"""
         SELECT
             r.id,
@@ -94,7 +134,7 @@ async def _vector_search(
         FROM reviews r
         WHERE r.datasource_id = :datasource_id
           AND r.embedding IS NOT NULL
-          {sent}
+          {filter_sql}
         ORDER BY r.embedding <=> :query_vec::vector
         LIMIT :limit
     """)
@@ -102,17 +142,10 @@ async def _vector_search(
         "query_vec": str(query_embedding),
         "datasource_id": datasource_id,
         "limit": limit,
+        **filter_params,
     })).fetchall()
 
-    return [
-        SearchResult(
-            review_id=row.id, content=row.content, score=row.score,
-            sentiment=row.sentiment, language=row.language,
-            reviewed_at=row.reviewed_at.isoformat() if row.reviewed_at else None,
-            similarity=round(float(row.similarity), 4),
-        )
-        for row in rows
-    ]
+    return _rows_to_results(rows)
 
 
 async def _fulltext_search(
@@ -121,9 +154,11 @@ async def _fulltext_search(
     query: str,
     limit: int,
     sentiment: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    version: Optional[str] = None,
 ) -> list[SearchResult]:
-    """BM25-style full-text search via PostgreSQL tsvector."""
-    sent = _sentiment_clause(sentiment)
+    filter_sql, filter_params = _build_filter_clauses(sentiment, date_from, date_to, version)
     sql = text(f"""
         SELECT
             r.id,
@@ -137,7 +172,7 @@ async def _fulltext_search(
         WHERE r.datasource_id = :datasource_id
           AND r.search_vector IS NOT NULL
           AND r.search_vector @@ websearch_to_tsquery('simple', :query)
-          {sent}
+          {filter_sql}
         ORDER BY similarity DESC
         LIMIT :limit
     """)
@@ -145,17 +180,10 @@ async def _fulltext_search(
         "query": query,
         "datasource_id": datasource_id,
         "limit": limit,
+        **filter_params,
     })).fetchall()
 
-    return [
-        SearchResult(
-            review_id=row.id, content=row.content, score=row.score,
-            sentiment=row.sentiment, language=row.language,
-            reviewed_at=row.reviewed_at.isoformat() if row.reviewed_at else None,
-            similarity=round(float(row.similarity), 4),
-        )
-        for row in rows
-    ]
+    return _rows_to_results(rows)
 
 
 async def _hybrid_search(
@@ -165,14 +193,12 @@ async def _hybrid_search(
     query_embedding: list[float],
     limit: int,
     sentiment: Optional[str] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    version: Optional[str] = None,
 ) -> list[SearchResult]:
-    """Reciprocal Rank Fusion of vector + full-text search.
-
-    Both retrievers fetch limit * 5 candidates so the fusion has enough
-    overlap to produce high-quality top-K results.
-    """
     candidate_limit = limit * _RETRIEVER_LIMIT_MULTIPLIER
-    sent = _sentiment_clause(sentiment)
+    filter_sql, filter_params = _build_filter_clauses(sentiment, date_from, date_to, version)
 
     sql = text(f"""
         WITH vector_ranked AS (
@@ -182,7 +208,7 @@ async def _hybrid_search(
             FROM reviews r
             WHERE r.datasource_id = :datasource_id
               AND r.embedding IS NOT NULL
-              {sent}
+              {filter_sql}
             ORDER BY r.embedding <=> :query_vec::vector
             LIMIT :candidate_limit
         ),
@@ -196,7 +222,7 @@ async def _hybrid_search(
             WHERE r.datasource_id = :datasource_id
               AND r.search_vector IS NOT NULL
               AND r.search_vector @@ websearch_to_tsquery('simple', :query)
-              {sent}
+              {filter_sql}
             ORDER BY ts_rank_cd(r.search_vector, websearch_to_tsquery('simple', :query)) DESC
             LIMIT :candidate_limit
         ),
@@ -229,12 +255,20 @@ async def _hybrid_search(
         "candidate_limit": candidate_limit,
         "rrf_k": _RRF_K,
         "limit": limit,
+        **filter_params,
     })).fetchall()
 
+    return _rows_to_results(rows)
+
+
+def _rows_to_results(rows) -> list[SearchResult]:
     return [
         SearchResult(
-            review_id=row.id, content=row.content, score=row.score,
-            sentiment=row.sentiment, language=row.language,
+            review_id=row.id,
+            content=row.content,
+            score=row.score,
+            sentiment=row.sentiment,
+            language=row.language,
             reviewed_at=row.reviewed_at.isoformat() if row.reviewed_at else None,
             similarity=round(float(row.similarity), 6),
         )
@@ -256,20 +290,30 @@ async def semantic_search(
     q: str = Query(..., min_length=2),
     limit: int = Query(default=10, le=50),
     sentiment: Optional[str] = Query(default=None),
+    date_from: Optional[date] = Query(default=None, description="Include reviews from this date (inclusive), e.g. 2024-01-01"),
+    date_to: Optional[date] = Query(default=None, description="Include reviews up to this date (inclusive), e.g. 2024-12-31"),
+    version: Optional[str] = Query(default=None, description="Filter by exact app version, e.g. 4.2.1"),
     search_type: Literal["hybrid", "vector", "fulltext"] = Query(default="hybrid"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Search over reviews.
+    """Search over reviews with optional metadata filters.
+
+    Filters (all combinable):
+    - sentiment: positive | neutral | negative
+    - date_from / date_to: ISO date (YYYY-MM-DD), both inclusive
+    - version: exact app version string
 
     search_type:
-      - hybrid   (default) — RRF fusion of vector + full-text
-      - vector   — semantic search only (pgvector cosine)
-      - fulltext — BM25 keyword search only (tsvector)
+    - hybrid (default): RRF fusion of vector + full-text
+    - vector: semantic search only
+    - fulltext: BM25 keyword search only
     """
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from must be before or equal to date_to")
+
     await _verify_datasource(db, datasource_id, current_user.id)
 
-    # Vector search needs embeddings
     if search_type in ("hybrid", "vector"):
         count_result = await db.execute(
             select(func.count()).select_from(Review).where(
@@ -283,21 +327,20 @@ async def semantic_search(
                     status_code=422,
                     detail="No embeddings found. Run the ML pipeline first.",
                 )
-            # hybrid falls back to fulltext if no embeddings
             log.warning("hybrid_no_embeddings_fallback", datasource_id=datasource_id)
             search_type = "fulltext"
 
     try:
         if search_type == "vector":
             query_embedding = _embed_query(q)
-            results = await _vector_search(db, datasource_id, query_embedding, limit, sentiment)
+            results = await _vector_search(db, datasource_id, query_embedding, limit, sentiment, date_from, date_to, version)
 
         elif search_type == "fulltext":
-            results = await _fulltext_search(db, datasource_id, q, limit, sentiment)
+            results = await _fulltext_search(db, datasource_id, q, limit, sentiment, date_from, date_to, version)
 
-        else:  # hybrid
+        else:
             query_embedding = _embed_query(q)
-            results = await _hybrid_search(db, datasource_id, q, query_embedding, limit, sentiment)
+            results = await _hybrid_search(db, datasource_id, q, query_embedding, limit, sentiment, date_from, date_to, version)
 
     except HTTPException:
         raise
@@ -333,6 +376,9 @@ async def ask(
         q=body.query,
         limit=body.limit,
         sentiment=body.sentiment_filter,
+        date_from=body.date_from,
+        date_to=body.date_to,
+        version=body.version,
         search_type=body.search_type,
         db=db,
         current_user=current_user,

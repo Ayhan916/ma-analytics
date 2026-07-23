@@ -58,3 +58,26 @@ async def test_invalid_search_type_returns_422(logged_in_client: AsyncClient):
         "/search?datasource_id=00000000-0000-0000-0000-000000000000&q=test&search_type=magic"
     )
     assert resp.status_code == 422
+
+
+async def test_date_filter_accepted(logged_in_client: AsyncClient):
+    resp = await logged_in_client.get(
+        "/search?datasource_id=00000000-0000-0000-0000-000000000000"
+        "&q=test&date_from=2024-01-01&date_to=2024-12-31"
+    )
+    assert resp.status_code == 404  # datasource not found, not 422
+
+
+async def test_date_filter_inverted_range_returns_422(logged_in_client: AsyncClient):
+    resp = await logged_in_client.get(
+        "/search?datasource_id=00000000-0000-0000-0000-000000000000"
+        "&q=test&date_from=2024-12-31&date_to=2024-01-01"
+    )
+    assert resp.status_code == 422
+
+
+async def test_version_filter_accepted(logged_in_client: AsyncClient):
+    resp = await logged_in_client.get(
+        "/search?datasource_id=00000000-0000-0000-0000-000000000000&q=test&version=4.2.1"
+    )
+    assert resp.status_code == 404  # datasource not found, not 422
