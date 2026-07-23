@@ -206,3 +206,42 @@ class TestStopWords:
 
 def test_embedding_dim():
     assert EMBEDDING_DIM == 384
+
+
+# ---------------------------------------------------------------------------
+# rerank — mock the CrossEncoder so we don't load the model in unit tests
+# ---------------------------------------------------------------------------
+
+class TestRerank:
+    def test_rerank_returns_scores_for_each_text(self, monkeypatch):
+        import numpy as np
+        from app.pipeline import ml as ml_module
+
+        fake_model = type("FakeCE", (), {
+            "predict": lambda self, pairs: np.array([0.9, 0.3, 0.7])
+        })()
+        monkeypatch.setattr(ml_module, "_reranker_model", fake_model)
+
+        from app.pipeline.ml import rerank
+        scores = rerank("crash", ["app crashes", "great app", "battery issue"])
+        assert len(scores) == 3
+        assert scores[0] == pytest.approx(0.9, abs=1e-5)
+        assert scores[2] == pytest.approx(0.7, abs=1e-5)
+
+    def test_rerank_empty_returns_empty(self, monkeypatch):
+        from app.pipeline.ml import rerank
+        assert rerank("anything", []) == []
+
+    def test_rerank_preserves_order_by_model_score(self, monkeypatch):
+        import numpy as np
+        from app.pipeline import ml as ml_module
+
+        # Model says text[1] is most relevant
+        fake_model = type("FakeCE", (), {
+            "predict": lambda self, pairs: np.array([0.2, 0.95, 0.5])
+        })()
+        monkeypatch.setattr(ml_module, "_reranker_model", fake_model)
+
+        from app.pipeline.ml import rerank
+        scores = rerank("query", ["low", "high", "mid"])
+        assert scores[1] == max(scores)

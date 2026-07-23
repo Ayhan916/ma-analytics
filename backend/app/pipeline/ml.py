@@ -9,9 +9,11 @@ log = logging.getLogger(__name__)
 # Lazy-loaded singletons — only loaded when first used in the worker
 _sentiment_pipeline = None
 _embedding_model = None
+_reranker_model = None
 
 MULTILINGUAL_SENTIMENT_MODEL = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
 MULTILINGUAL_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 EMBEDDING_DIM = 384
 
 GERMAN_STOP_WORDS = {
@@ -133,6 +135,30 @@ def get_embedding_model():
         _embedding_model = SentenceTransformer(MULTILINGUAL_EMBEDDING_MODEL)
         log.info("embedding_model_loaded")
     return _embedding_model
+
+
+def get_reranker_model():
+    global _reranker_model
+    if _reranker_model is None:
+        from sentence_transformers import CrossEncoder
+        log.info("loading_reranker_model", model=RERANKER_MODEL)
+        _reranker_model = CrossEncoder(RERANKER_MODEL, max_length=512)
+        log.info("reranker_model_loaded")
+    return _reranker_model
+
+
+def rerank(query: str, texts: list[str]) -> list[float]:
+    """Score each (query, text) pair with the cross-encoder and return raw scores.
+
+    Higher score = more relevant. Scores are not normalised — use them only
+    for sorting, not for display as probabilities.
+    """
+    if not texts:
+        return []
+    model = get_reranker_model()
+    pairs = [[query, t] for t in texts]
+    scores = model.predict(pairs)
+    return scores.tolist()
 
 
 def predict_sentiments(texts: list[str], batch_size: int = 32) -> list[str]:

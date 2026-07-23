@@ -81,3 +81,11 @@ async def test_version_filter_accepted(logged_in_client: AsyncClient):
         "/search?datasource_id=00000000-0000-0000-0000-000000000000&q=test&version=4.2.1"
     )
     assert resp.status_code == 404  # datasource not found, not 422
+
+
+async def test_rerank_param_accepted(logged_in_client: AsyncClient):
+    # rerank=true is a valid param — 404 because datasource doesn't exist, not 422
+    resp = await logged_in_client.get(
+        "/search?datasource_id=00000000-0000-0000-0000-000000000000&q=crash&rerank=true"
+    )
+    assert resp.status_code == 404

@@ -60,6 +60,7 @@ class AskRequest(BaseModel):
     date_to: Optional[date] = None
     version: Optional[str] = None
     search_type: Literal["hybrid", "vector", "fulltext"] = "hybrid"
+    rerank: bool = False
 
 
 class AskResponse(BaseModel):
@@ -261,6 +262,30 @@ async def _hybrid_search(
     return _rows_to_results(rows)
 
 
+async def _apply_reranker(query: str, results: list[SearchResult], limit: int) -> list[SearchResult]:
+    """Rerank results with a cross-encoder and return the top `limit` by relevance.
+
+    Runs in a thread-pool executor because the cross-encoder is CPU-bound and
+    would otherwise block the asyncio event loop.
+    """
+    import asyncio
+    from app.pipeline.ml import rerank as _rerank
+
+    texts = [r.content for r in results]
+
+    def _run() -> list[float]:
+        return _rerank(query, texts)
+
+    scores = await asyncio.get_event_loop().run_in_executor(None, _run)
+
+    # Attach reranker score as the new similarity and sort descending
+    scored = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
+    reranked = []
+    for score, result in scored[:limit]:
+        reranked.append(result.model_copy(update={"similarity": round(float(score), 6)}))
+    return reranked
+
+
 def _rows_to_results(rows) -> list[SearchResult]:
     return [
         SearchResult(
@@ -294,6 +319,7 @@ async def semantic_search(
     date_to: Optional[date] = Query(default=None, description="Include reviews up to this date (inclusive), e.g. 2024-12-31"),
     version: Optional[str] = Query(default=None, description="Filter by exact app version, e.g. 4.2.1"),
     search_type: Literal["hybrid", "vector", "fulltext"] = Query(default="hybrid"),
+    rerank: bool = Query(default=False, description="Re-score results with a cross-encoder for higher precision"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -330,17 +356,23 @@ async def semantic_search(
             log.warning("hybrid_no_embeddings_fallback", datasource_id=datasource_id)
             search_type = "fulltext"
 
+    # When reranking, pull more candidates so the cross-encoder has enough to choose from
+    retrieval_limit = limit * 3 if rerank else limit
+
     try:
         if search_type == "vector":
             query_embedding = _embed_query(q)
-            results = await _vector_search(db, datasource_id, query_embedding, limit, sentiment, date_from, date_to, version)
+            results = await _vector_search(db, datasource_id, query_embedding, retrieval_limit, sentiment, date_from, date_to, version)
 
         elif search_type == "fulltext":
-            results = await _fulltext_search(db, datasource_id, q, limit, sentiment, date_from, date_to, version)
+            results = await _fulltext_search(db, datasource_id, q, retrieval_limit, sentiment, date_from, date_to, version)
 
         else:
             query_embedding = _embed_query(q)
-            results = await _hybrid_search(db, datasource_id, q, query_embedding, limit, sentiment, date_from, date_to, version)
+            results = await _hybrid_search(db, datasource_id, q, query_embedding, retrieval_limit, sentiment, date_from, date_to, version)
+
+        if rerank and results:
+            results = await _apply_reranker(q, results, limit)
 
     except HTTPException:
         raise
@@ -380,6 +412,7 @@ async def ask(
         date_to=body.date_to,
         version=body.version,
         search_type=body.search_type,
+        rerank=body.rerank,
         db=db,
         current_user=current_user,
     )

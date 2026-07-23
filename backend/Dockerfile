@@ -20,6 +20,11 @@ from transformers import pipeline; \
 pipeline('sentiment-analysis', model='cardiffnlp/twitter-xlm-roberta-base-sentiment', truncation=True, max_length=512); \
 print('Sentiment model cached.')"
 
+RUN python -c "\
+from sentence_transformers import CrossEncoder; \
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512); \
+print('Reranker model cached.')"
+
 COPY . .
 RUN chmod +x start.sh
 
