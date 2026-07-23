@@ -70,9 +70,15 @@ class AskResponse(BaseModel):
     generated_by: str
 
 
-def _embed_query(query: str) -> list[float]:
+def _embed_query(query: str) -> Optional[list[float]]:
+    """Embed query with the sentence-transformer model.
+
+    Returns None when the ML model is not installed (API-only image without ML libs).
+    """
     from app.pipeline.ml import get_embedding_model
     model = get_embedding_model()
+    if model is None:
+        return None
     return model.encode([query], normalize_embeddings=True)[0].tolist()
 
 
@@ -267,6 +273,7 @@ async def _apply_reranker(query: str, results: list[SearchResult], limit: int) -
 
     Runs in a thread-pool executor because the cross-encoder is CPU-bound and
     would otherwise block the asyncio event loop.
+    Falls back to original ordering when the reranker model is not available (API-only image).
     """
     import asyncio
     from app.pipeline.ml import rerank as _rerank
@@ -277,6 +284,10 @@ async def _apply_reranker(query: str, results: list[SearchResult], limit: int) -
         return _rerank(query, texts)
 
     scores = await asyncio.get_event_loop().run_in_executor(None, _run)
+
+    if not scores:
+        # Reranker not available — return original results up to limit
+        return results[:limit]
 
     # Attach reranker score as the new similarity and sort descending
     scored = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
@@ -362,14 +373,21 @@ async def semantic_search(
     try:
         if search_type == "vector":
             query_embedding = _embed_query(q)
+            if query_embedding is None:
+                raise HTTPException(status_code=422, detail="Vector search requires ML libs (not installed in this deployment).")
             results = await _vector_search(db, datasource_id, query_embedding, retrieval_limit, sentiment, date_from, date_to, version)
 
         elif search_type == "fulltext":
             results = await _fulltext_search(db, datasource_id, q, retrieval_limit, sentiment, date_from, date_to, version)
 
-        else:
+        else:  # hybrid
             query_embedding = _embed_query(q)
-            results = await _hybrid_search(db, datasource_id, q, query_embedding, retrieval_limit, sentiment, date_from, date_to, version)
+            if query_embedding is None:
+                log.warning("ml_unavailable_hybrid_fallback", datasource_id=datasource_id)
+                results = await _fulltext_search(db, datasource_id, q, retrieval_limit, sentiment, date_from, date_to, version)
+                search_type = "fulltext"
+            else:
+                results = await _hybrid_search(db, datasource_id, q, query_embedding, retrieval_limit, sentiment, date_from, date_to, version)
 
         if rerank and results:
             results = await _apply_reranker(q, results, limit)

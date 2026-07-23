@@ -9,7 +9,9 @@ log = logging.getLogger(__name__)
 # Lazy-loaded singletons — only loaded when first used in the worker
 _sentiment_pipeline = None
 _embedding_model = None
+_embedding_model_loaded = False   # True after first load attempt (even if None)
 _reranker_model = None
+_reranker_model_loaded = False    # True after first load attempt (even if None)
 
 MULTILINGUAL_SENTIMENT_MODEL = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
 MULTILINGUAL_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -128,34 +130,51 @@ def get_sentiment_pipeline():
 
 
 def get_embedding_model():
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        log.info("loading_embedding_model", model=MULTILINGUAL_EMBEDDING_MODEL)
-        _embedding_model = SentenceTransformer(MULTILINGUAL_EMBEDDING_MODEL)
-        log.info("embedding_model_loaded")
+    """Return the embedding model, or None if sentence_transformers is not installed."""
+    global _embedding_model, _embedding_model_loaded
+    if _embedding_model is not None:
+        return _embedding_model
+    if not _embedding_model_loaded:
+        _embedding_model_loaded = True
+        try:
+            from sentence_transformers import SentenceTransformer
+            log.info("loading_embedding_model %s", MULTILINGUAL_EMBEDDING_MODEL)
+            _embedding_model = SentenceTransformer(MULTILINGUAL_EMBEDDING_MODEL)
+            log.info("embedding_model_loaded")
+        except ImportError:
+            log.warning("sentence_transformers_not_installed — embedding model unavailable")
     return _embedding_model
 
 
 def get_reranker_model():
-    global _reranker_model
-    if _reranker_model is None:
-        from sentence_transformers import CrossEncoder
-        log.info("loading_reranker_model", model=RERANKER_MODEL)
-        _reranker_model = CrossEncoder(RERANKER_MODEL, max_length=512)
-        log.info("reranker_model_loaded")
+    """Return the cross-encoder reranker, or None if sentence_transformers is not installed."""
+    global _reranker_model, _reranker_model_loaded
+    if _reranker_model is not None:
+        return _reranker_model
+    if not _reranker_model_loaded:
+        _reranker_model_loaded = True
+        try:
+            from sentence_transformers import CrossEncoder
+            log.info("loading_reranker_model %s", RERANKER_MODEL)
+            _reranker_model = CrossEncoder(RERANKER_MODEL, max_length=512)
+            log.info("reranker_model_loaded")
+        except ImportError:
+            log.warning("sentence_transformers_not_installed — reranker model unavailable")
     return _reranker_model
 
 
 def rerank(query: str, texts: list[str]) -> list[float]:
     """Score each (query, text) pair with the cross-encoder and return raw scores.
 
+    Returns empty list if the reranker model is not available (API-only image).
     Higher score = more relevant. Scores are not normalised — use them only
     for sorting, not for display as probabilities.
     """
     if not texts:
         return []
     model = get_reranker_model()
+    if model is None:
+        return []
     pairs = [[query, t] for t in texts]
     scores = model.predict(pairs)
     return scores.tolist()
