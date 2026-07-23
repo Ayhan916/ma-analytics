@@ -12,10 +12,12 @@ Supported filters (combinable):
 """
 from __future__ import annotations
 
+import json
 import structlog
 from datetime import date
-from typing import Optional, Literal
+from typing import Optional, Literal, AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func
@@ -409,6 +411,59 @@ async def semantic_search(
     )
 
 
+def _build_ask_prompt(query: str, results: list[SearchResult]) -> str:
+    context_lines = []
+    for i, r in enumerate(results, 1):
+        stars = f"{r.score:.0f}★" if r.score else "no rating"
+        context_lines.append(f"[{i}] ({stars}, {r.sentiment or 'unknown'}) {r.content}")
+    context = "\n".join(context_lines)
+    return (
+        f"You are analyzing user reviews for a mobile app. "
+        f"Answer the following question based ONLY on the provided reviews. "
+        f"Cite specific reviews using [N] notation. "
+        f"If the reviews don't contain relevant information, say so.\n\n"
+        f"Question: {query}\n\n"
+        f"Reviews:\n{context}\n\n"
+        f"Answer:"
+    )
+
+
+async def _ask_event_generator(
+    query: str,
+    results: list[SearchResult],
+    api_key: str,
+    model: str,
+) -> AsyncGenerator[str, None]:
+    """Yield SSE events: sources → token chunks → done (or error)."""
+    sources_payload = [r.model_dump() for r in results]
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources_payload})}\n\n"
+
+    if not results:
+        yield f"data: {json.dumps({'type': 'done', 'generated_by': 'none'})}\n\n"
+        return
+
+    prompt = _build_ask_prompt(query, results)
+
+    try:
+        from groq import AsyncGroq
+        client = AsyncGroq(api_key=api_key)
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.2,
+            stream=True,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'generated_by': 'groq'})}\n\n"
+    except Exception:
+        log.exception("ask_stream_llm_failed", query=query)
+        yield f"data: {json.dumps({'type': 'error', 'message': 'LLM streaming failed'})}\n\n"
+
+
 @router.post("/ask", response_model=AskResponse)
 async def ask(
     body: AskRequest,
@@ -443,21 +498,7 @@ async def ask(
             generated_by="none",
         )
 
-    context_lines = []
-    for i, r in enumerate(search_resp.results, 1):
-        stars = f"{r.score:.0f}★" if r.score else "no rating"
-        context_lines.append(f"[{i}] ({stars}, {r.sentiment or 'unknown'}) {r.content}")
-    context = "\n".join(context_lines)
-
-    prompt = (
-        f"You are analyzing user reviews for a mobile app. "
-        f"Answer the following question based ONLY on the provided reviews. "
-        f"Cite specific reviews using [N] notation. "
-        f"If the reviews don't contain relevant information, say so.\n\n"
-        f"Question: {body.query}\n\n"
-        f"Reviews:\n{context}\n\n"
-        f"Answer:"
-    )
+    prompt = _build_ask_prompt(body.query, search_resp.results)
 
     try:
         from groq import Groq
@@ -485,4 +526,48 @@ async def ask(
         answer=answer,
         sources=search_resp.results,
         generated_by=generated_by,
+    )
+
+
+@router.post("/ask/stream")
+async def ask_stream(
+    body: AskRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Streaming RAG endpoint: retrieves reviews then streams the LLM answer as SSE.
+
+    SSE event types (all JSON-encoded in the `data` field):
+    - {"type": "sources", "sources": [...]}   — search results, sent first before LLM starts
+    - {"type": "token",   "content": "..."}  — one LLM token chunk
+    - {"type": "done",    "generated_by": "groq" | "none"}  — stream complete
+    - {"type": "error",   "message": "..."}  — LLM call failed
+    """
+    await _verify_datasource(db, body.datasource_id, current_user.id)
+
+    if not settings.GROQ_API_KEY:
+        raise HTTPException(status_code=422, detail="GROQ_API_KEY not configured.")
+
+    search_resp = await semantic_search(
+        datasource_id=body.datasource_id,
+        q=body.query,
+        limit=body.limit,
+        sentiment=body.sentiment_filter,
+        date_from=body.date_from,
+        date_to=body.date_to,
+        version=body.version,
+        search_type=body.search_type,
+        rerank=body.rerank,
+        db=db,
+        current_user=current_user,
+    )
+
+    return StreamingResponse(
+        _ask_event_generator(body.query, search_resp.results, settings.GROQ_API_KEY, settings.GROQ_MODEL),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
