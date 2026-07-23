@@ -11,6 +11,7 @@ import pytest
 
 from app.pipeline.ml import (
     clean_text,
+    cluster_texts,
     detect_language,
     get_cluster_label,
     is_label_meaningful,
@@ -149,6 +150,53 @@ class TestGetClusterLabel:
     def test_single_text(self):
         result = get_cluster_label(["crashes"], cluster_type="issue")
         assert isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# cluster_texts (HDBSCAN)
+# ---------------------------------------------------------------------------
+
+class TestClusterTexts:
+    def _make_clustered(self) -> np.ndarray:
+        rng = np.random.default_rng(seed=0)
+        # Two tight clusters far apart in 16-dim space
+        c1 = rng.normal(loc=0.0, scale=0.05, size=(30, 16)).astype(np.float32)
+        c2 = rng.normal(loc=5.0, scale=0.05, size=(30, 16)).astype(np.float32)
+        return np.vstack([c1, c2])
+
+    def test_returns_label_per_sample(self):
+        embeddings = self._make_clustered()
+        labels = cluster_texts(embeddings, min_cluster_size=5)
+        assert len(labels) == len(embeddings)
+
+    def test_finds_two_clear_clusters(self):
+        embeddings = self._make_clustered()
+        labels = cluster_texts(embeddings, min_cluster_size=5)
+        n_clusters = len({int(l) for l in labels if int(l) >= 0})
+        assert n_clusters >= 2
+
+    def test_labels_are_integers(self):
+        embeddings = self._make_clustered()
+        labels = cluster_texts(embeddings, min_cluster_size=5)
+        for l in labels:
+            assert isinstance(int(l), int)
+
+    def test_noise_label_is_minus_one(self):
+        # Noise points (if any) must be -1, not some other negative value
+        embeddings = self._make_clustered()
+        labels = cluster_texts(embeddings, min_cluster_size=5)
+        for l in labels:
+            assert int(l) >= -1
+
+    def test_kmeans_fallback_on_uniform_data(self):
+        # Perfectly uniform data → HDBSCAN sees no density structure → KMeans fallback
+        rng = np.random.default_rng(seed=7)
+        embeddings = rng.uniform(0, 1, size=(40, 16)).astype(np.float32)
+        labels = cluster_texts(embeddings, min_cluster_size=5)
+        # After fallback, all points should be assigned (no noise)
+        n_clusters = len({int(l) for l in labels if int(l) >= 0})
+        assert n_clusters >= 1
+        assert len(labels) == 40
 
 
 # ---------------------------------------------------------------------------

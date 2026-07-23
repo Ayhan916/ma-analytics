@@ -7,7 +7,7 @@ from app.pipeline.celery_app import celery_app
 from app.pipeline.db import SessionLocal
 from app.pipeline.ml import (
     clean_text, detect_language, predict_sentiments, create_embeddings,
-    cluster_texts, optimal_cluster_count, get_cluster_label, generate_cluster_summary,
+    cluster_texts, get_cluster_label, generate_cluster_summary,
 )
 from app.models.pipeline_job import PipelineJob, JobStatus
 from app.models.review import Review
@@ -58,10 +58,10 @@ def _build_clusters(
     indices: list[int],
     labels,
     cluster_type: ClusterType,
-    n_clusters: int,
     dominant_language: str,
 ):
-    for cid in range(n_clusters):
+    # Iterate unique non-negative cluster IDs (HDBSCAN assigns -1 to noise points)
+    for cid in sorted({int(l) for l in labels if int(l) >= 0}):
         cluster_indices = [indices[i] for i, lbl in enumerate(labels) if lbl == cid]
         if len(cluster_indices) < 2:
             continue
@@ -181,17 +181,17 @@ def _run_ml_pipeline(db, job_id: str, datasource_id: str):
     neg_indices = [i for i, s in enumerate(sentiments) if s == "negative"]
     if len(neg_indices) >= MIN_CLUSTER_SIZE:
         neg_emb = all_embeddings[neg_indices]
-        n = optimal_cluster_count(neg_emb, min_k=2, max_k=min(15, len(neg_indices) // 5))
-        labels = cluster_texts(neg_emb, n)
-        _build_clusters(db, datasource_id, reviews, neg_indices, labels, ClusterType.issue, n, dominant_language)
+        labels = cluster_texts(neg_emb, min_cluster_size=MIN_CLUSTER_SIZE)
+        n = len({int(l) for l in labels if int(l) >= 0})
+        _build_clusters(db, datasource_id, reviews, neg_indices, labels, ClusterType.issue, dominant_language)
         log.info("issue_clusters_built", n_clusters=n, reviews=len(neg_indices))
 
     pos_indices = [i for i, s in enumerate(sentiments) if s == "positive"]
     if len(pos_indices) >= MIN_CLUSTER_SIZE:
         pos_emb = all_embeddings[pos_indices]
-        n = optimal_cluster_count(pos_emb, min_k=2, max_k=min(15, len(pos_indices) // 5))
-        labels = cluster_texts(pos_emb, n)
-        _build_clusters(db, datasource_id, reviews, pos_indices, labels, ClusterType.strength, n, dominant_language)
+        labels = cluster_texts(pos_emb, min_cluster_size=MIN_CLUSTER_SIZE)
+        n = len({int(l) for l in labels if int(l) >= 0})
+        _build_clusters(db, datasource_id, reviews, pos_indices, labels, ClusterType.strength, dominant_language)
         log.info("strength_clusters_built", n_clusters=n, reviews=len(pos_indices))
 
     # --- Finalize ---

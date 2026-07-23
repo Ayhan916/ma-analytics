@@ -236,10 +236,31 @@ def create_embeddings(texts: list[str], batch_size: int = 64) -> np.ndarray:
     )
 
 
-def cluster_texts(embeddings: np.ndarray, n_clusters: int) -> np.ndarray:
-    from sklearn.cluster import KMeans
-    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    return km.fit_predict(embeddings)
+def cluster_texts(embeddings: np.ndarray, min_cluster_size: int = 10) -> np.ndarray:
+    """Cluster embeddings with HDBSCAN. Noise points receive label -1.
+
+    Automatically determines the number of clusters — no k required.
+    Falls back to KMeans(k=2) when HDBSCAN finds fewer than 2 clusters on
+    datasets large enough to contain at least two clusters (≥ 2 * min_cluster_size).
+    """
+    from sklearn.cluster import HDBSCAN
+
+    hdb = HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=max(1, min_cluster_size // 2),
+        metric="euclidean",
+        cluster_selection_method="eom",
+    )
+    labels = hdb.fit_predict(embeddings)
+
+    n_found = len({l for l in labels if l >= 0})
+    if n_found < 2 and len(embeddings) >= min_cluster_size * 2:
+        log.warning("hdbscan_no_clusters_fallback_kmeans n_samples=%d", len(embeddings))
+        from sklearn.cluster import KMeans
+        km = KMeans(n_clusters=2, random_state=42, n_init=10)
+        labels = km.fit_predict(embeddings)
+
+    return labels
 
 
 def optimal_cluster_count(embeddings: np.ndarray, min_k: int = 2, max_k: int = 15) -> int:
