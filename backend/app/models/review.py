@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import String, DateTime, Float, ForeignKey, Text, Index
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
@@ -37,6 +38,9 @@ class Review(Base):
         Vector(384) if _VECTOR_TYPE is not None else Text,
         nullable=True,
     )
+
+    # Full-text search index — populated by DB trigger on insert/update
+    search_vector: Mapped[Optional[str]] = mapped_column(TSVECTOR, nullable=True)
 
     datasource: Mapped["DataSource"] = relationship(back_populates="reviews")
     cluster_memberships: Mapped[list["ClusterReview"]] = relationship(back_populates="review", cascade="all, delete-orphan")
