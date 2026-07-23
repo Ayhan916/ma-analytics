@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: ma_analytics
@@ -55,6 +55,19 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  flower:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://ma_analytics:ma_analytics@db:5432/ma_analytics
+      REDIS_URL: redis://redis:6379/0
+    command: celery -A app.pipeline.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
 
   frontend:
     build:

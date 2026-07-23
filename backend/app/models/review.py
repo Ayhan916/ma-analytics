@@ -6,11 +6,19 @@ from sqlalchemy import String, DateTime, Float, ForeignKey, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 
+try:
+    from pgvector.sqlalchemy import Vector
+    _VECTOR_TYPE = Vector(384)
+except ImportError:
+    from sqlalchemy import ARRAY, Float as _Float
+    _VECTOR_TYPE = None
+
 
 class Review(Base):
     __tablename__ = "reviews"
     __table_args__ = (
         Index("ix_reviews_datasource_external", "datasource_id", "external_id"),
+        Index("ix_reviews_datasource_id", "datasource_id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -19,8 +27,16 @@ class Review(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     sentiment: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    language: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # Persisted embedding for RAG retrieval (pgvector vector(384))
+    embedding: Mapped[Optional[list]] = mapped_column(
+        Vector(384) if _VECTOR_TYPE is not None else Text,
+        nullable=True,
+    )
+
     datasource: Mapped["DataSource"] = relationship(back_populates="reviews")
+    cluster_memberships: Mapped[list["ClusterReview"]] = relationship(back_populates="review", cascade="all, delete-orphan")

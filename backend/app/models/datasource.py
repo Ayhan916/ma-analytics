@@ -1,7 +1,8 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Enum, Index
+from typing import Optional
+from sqlalchemy import String, DateTime, ForeignKey, Enum, Index, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.models.base import Base
 import enum
@@ -21,10 +22,15 @@ class DataSource(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    app_id: Mapped[str] = mapped_column(String, nullable=True)
+    app_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     type: Mapped[DataSourceType] = mapped_column(Enum(DataSourceType), nullable=False)
-    last_synced: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Scraping parameters — persisted so retry uses the same settings
+    scrape_lang: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    scrape_country: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    scrape_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="datasources")
     reviews: Mapped[list["Review"]] = relationship(back_populates="datasource", cascade="all, delete-orphan")

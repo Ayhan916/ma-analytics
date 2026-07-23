@@ -69,13 +69,20 @@ def _to_out(m: Message) -> MessageOut:
     )
 
 
-def _detect_sentiment(text: str) -> str:
-    try:
-        from app.pipeline.ml import clean_text, predict_sentiments
-        cleaned = clean_text(text)
-        return predict_sentiments([cleaned])[0]
-    except Exception:
-        return "neutral"
+async def _detect_sentiment(text: str) -> str:
+    """Run CPU-bound sentiment inference in a thread pool to avoid blocking the event loop."""
+    import asyncio
+    from app.pipeline.ml import clean_text, predict_sentiments
+
+    def _run() -> str:
+        try:
+            cleaned = clean_text(text)
+            return predict_sentiments([cleaned])[0]
+        except Exception:
+            logger.warning("message_sentiment_failed", text_preview=text[:50])
+            return "neutral"
+
+    return await asyncio.get_event_loop().run_in_executor(None, _run)
 
 
 VALID_SENTIMENTS = ["positive", "neutral", "negative"]
@@ -105,7 +112,7 @@ async def create_message(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    sentiment = _detect_sentiment(body.text)
+    sentiment = await _detect_sentiment(body.text)
     msg = Message(
         id=str(uuid.uuid4()),
         user_id=current_user.id,

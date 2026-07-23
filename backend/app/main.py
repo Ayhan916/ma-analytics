@@ -11,7 +11,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.api import health, auth, datasources, jobs, dashboard, tickets, messages
+from app.api import health, auth, datasources, jobs, dashboard, tickets, messages, search
 
 setup_logging()
 log = structlog.get_logger(__name__)
@@ -86,5 +86,6 @@ app.include_router(jobs.router)
 app.include_router(dashboard.router)
 app.include_router(tickets.router)
 app.include_router(messages.router)
+app.include_router(search.router)
 
 log.info("startup", app=settings.APP_NAME, debug=settings.DEBUG)
