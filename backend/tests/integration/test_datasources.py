@@ -21,7 +21,7 @@ async def test_list_datasources_empty_for_new_user(logged_in_client: AsyncClient
 
 async def test_create_google_play_datasource(logged_in_client: AsyncClient):
     with patch("app.pipeline.tasks.scrape_and_run") as mock_task:
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         resp = await logged_in_client.post("/datasources/google-play", json={
             "name": "Test App",
             "app_id": "com.test.app",
@@ -47,7 +47,7 @@ async def test_create_google_play_invalid_app_id(logged_in_client: AsyncClient):
 
 async def test_create_google_play_count_is_capped(logged_in_client: AsyncClient):
     with patch("app.pipeline.tasks.scrape_and_run") as mock_task:
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         resp = await logged_in_client.post("/datasources/google-play", json={
             "name": "Big App",
             "app_id": "com.big.app",
@@ -60,7 +60,7 @@ async def test_create_google_play_count_is_capped(logged_in_client: AsyncClient)
 
 async def test_delete_datasource(logged_in_client: AsyncClient):
     with patch("app.pipeline.tasks.scrape_and_run") as mock_task:
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         create_resp = await logged_in_client.post("/datasources/google-play", json={
             "name": "To Delete",
             "app_id": "com.delete.me",
@@ -69,7 +69,8 @@ async def test_delete_datasource(logged_in_client: AsyncClient):
     assert create_resp.status_code == 201
     ds_id = create_resp.json()["id"]
 
-    del_resp = await logged_in_client.delete(f"/datasources/{ds_id}")
+    with patch("app.api.datasources.celery_app"):
+        del_resp = await logged_in_client.delete(f"/datasources/{ds_id}")
     assert del_resp.status_code == 204
 
     list_resp = await logged_in_client.get("/datasources")
@@ -77,10 +78,29 @@ async def test_delete_datasource(logged_in_client: AsyncClient):
     assert ds_id not in ids
 
 
+async def test_delete_datasource_with_pending_job_revokes_celery_task(logged_in_client: AsyncClient):
+    with patch("app.pipeline.tasks.scrape_and_run") as mock_task:
+        mock_task.apply_async = MagicMock()
+        create_resp = await logged_in_client.post("/datasources/google-play", json={
+            "name": "Revoke Test App",
+            "app_id": "com.revoke.test",
+            "count": 10,
+        })
+    assert create_resp.status_code == 201
+    ds_id = create_resp.json()["id"]
+    job_id = create_resp.json()["job_id"]
+
+    with patch("app.api.datasources.celery_app") as mock_celery:
+        del_resp = await logged_in_client.delete(f"/datasources/{ds_id}")
+
+    assert del_resp.status_code == 204
+    mock_celery.control.revoke.assert_called_once_with(job_id, terminate=True, signal="SIGTERM")
+
+
 async def test_delete_other_users_datasource_returns_404(client: AsyncClient, logged_in_client: AsyncClient):
     # Create a datasource as the logged-in user
     with patch("app.pipeline.tasks.scrape_and_run") as mock_task:
-        mock_task.delay = MagicMock()
+        mock_task.apply_async = MagicMock()
         create_resp = await logged_in_client.post("/datasources/google-play", json={
             "name": "Private App",
             "app_id": "com.private.app",

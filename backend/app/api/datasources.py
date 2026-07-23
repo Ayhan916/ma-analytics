@@ -15,6 +15,7 @@ from app.models.datasource import DataSource, DataSourceType
 from app.models.pipeline_job import PipelineJob, JobStatus
 from app.models.review import Review
 from app.models.user import User
+from app.pipeline.celery_app import celery_app
 
 router = APIRouter(prefix="/datasources", tags=["datasources"])
 log = structlog.get_logger(__name__)
@@ -109,7 +110,7 @@ async def create_google_play_source(
     log.info("scrape_job_queued", app_id=body.app_id, count=body.count, lang=body.lang)
 
     from app.pipeline.tasks import scrape_and_run
-    scrape_and_run.delay(job.id, ds.id, body.app_id, body.count, body.lang, body.country)
+    scrape_and_run.apply_async(args=[job.id, ds.id, body.app_id, body.count, body.lang, body.country], task_id=job.id)
 
     return DataSourceResponse(
         id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
@@ -182,7 +183,7 @@ async def upload_csv(
     await db.commit()
 
     from app.pipeline.tasks import run_pipeline
-    run_pipeline.delay(job.id, ds.id)
+    run_pipeline.apply_async(args=[job.id, ds.id], task_id=job.id)
 
     return DataSourceResponse(
         id=ds.id, name=ds.name, type=ds.type.value, app_id=None,
@@ -245,14 +246,18 @@ async def delete_datasource(
     if not ds:
         raise HTTPException(status_code=404, detail="DataSource not found")
 
-    # Warn if a job is currently running (worker will fail gracefully on FK violation)
     job_result = await db.execute(
         select(PipelineJob)
         .where(PipelineJob.datasource_id == datasource_id, PipelineJob.status.in_([JobStatus.pending, JobStatus.running]))
         .limit(1)
     )
-    if job_result.scalar_one_or_none():
-        log.warning("delete_while_job_running", datasource_id=datasource_id)
+    active_job = job_result.scalar_one_or_none()
+    if active_job:
+        log.warning("cancelling_active_job", datasource_id=datasource_id, job_id=active_job.id)
+        try:
+            celery_app.control.revoke(active_job.id, terminate=True, signal="SIGTERM")
+        except Exception as exc:
+            log.error("revoke_failed", job_id=active_job.id, error=str(exc))
 
     await db.delete(ds)
     await db.commit()
@@ -302,14 +307,14 @@ async def retry_pipeline(
 
     if review_count > 0:
         from app.pipeline.tasks import run_pipeline
-        run_pipeline.delay(new_job.id, ds.id)
+        run_pipeline.apply_async(args=[new_job.id, ds.id], task_id=new_job.id)
     else:
         # Use stored scraping parameters
         lang = ds.scrape_lang or "de"
         country = ds.scrape_country or "de"
         count = ds.scrape_count or 500
         from app.pipeline.tasks import scrape_and_run
-        scrape_and_run.delay(new_job.id, ds.id, ds.app_id, count, lang, country)
+        scrape_and_run.apply_async(args=[new_job.id, ds.id, ds.app_id, count, lang, country], task_id=new_job.id)
         log.info("retry_scrape", app_id=ds.app_id, lang=lang, country=country, count=count)
 
     return DataSourceResponse(
