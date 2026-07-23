@@ -256,19 +256,111 @@ def optimal_cluster_count(embeddings: np.ndarray, min_k: int = 2, max_k: int = 1
     return best_k
 
 
-def get_cluster_label(texts: list[str], cluster_type: str, language: str = "unknown") -> str:
-    """
-    Extract a meaningful label from cluster texts using TF-IDF.
-    Uses language-appropriate stop words and returns terms sorted by score.
-    """
-    if not texts:
-        return f"{cluster_type.title()} Cluster"
+# Words that are too generic to be meaningful cluster labels on their own.
+# These complement COMBINED_STOP_WORDS for the label-quality check.
+GENERIC_APP_TERMS = {
+    "app", "application", "apps", "update", "updates", "version", "versions",
+    "good", "great", "bad", "nice", "ok", "okay", "fine", "best", "worst",
+    "use", "used", "using", "user", "users", "like", "love", "hate", "need",
+    "work", "works", "working", "make", "makes", "get", "gets", "go", "goes",
+    "time", "times", "day", "days", "week", "month", "year", "ago",
+    "please", "thank", "thanks", "help", "please", "fix", "fixed",
+    "problem", "issue", "issues", "error", "errors", "bug", "bugs",
+    "star", "stars", "rating", "review", "reviews", "feedback",
+    "gut", "schlecht", "toll", "super", "prima", "leider", "bitte",
+    "danke", "hilfe", "fehler", "problem", "probleme", "version", "update",
+    "app", "nutzer", "nutzen", "benutzen", "funktioniert", "funktionieren",
+}
 
+
+def is_label_meaningful(label: str) -> bool:
+    """Return True if the label carries specific, non-generic information.
+
+    A label is rejected when:
+    - It is the fallback string (ends with "Cluster")
+    - All unique terms are in GENERIC_APP_TERMS
+    - All terms are identical (e.g. TF-IDF picked the same word 3 times)
+    """
+    if label.endswith("Cluster"):
+        return False
+
+    # Split on separator and strip whitespace
+    terms = [t.strip().lower() for t in label.split("/") if t.strip()]
+    if not terms:
+        return False
+
+    # Reject if we have multiple terms but they are all identical (e.g. "app / app / app")
+    if len(terms) > 1 and len(set(terms)) == 1:
+        return False
+
+    # Reject if every individual word in every term is generic
+    all_generic = all(
+        all(word in GENERIC_APP_TERMS or word in COMBINED_STOP_WORDS for word in term.split())
+        for term in terms
+    )
+    return not all_generic
+
+
+def _generate_label_with_llm(
+    example_texts: list[str],
+    cluster_type: str,
+    language: str,
+    groq_api_key: str,
+    model: str = "llama3-70b-8192",
+) -> Optional[str]:
+    """Ask the LLM for a concise 2-4 word label when TF-IDF fails."""
+    lang_instruction = (
+        "Antworte auf Deutsch." if language == "de"
+        else "Respond in English." if language == "en"
+        else "Respond in the same language as the reviews."
+    )
+    sample = "\n".join(f"- {t[:150]}" for t in example_texts[:6])
+    prompt = (
+        f"You are labeling a cluster of app reviews (type: {cluster_type}).\n"
+        f"Reviews:\n{sample}\n\n"
+        f"Give a concise 2-4 word label that captures the SPECIFIC topic "
+        f"(not just 'app issue' or 'good feature'). "
+        f"Reply with ONLY the label, no explanation. {lang_instruction}"
+    )
+    try:
+        from groq import Groq
+        client = Groq(api_key=groq_api_key)
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=30,
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content.strip()
+        # Truncate to 60 chars max to avoid runaway responses
+        return raw[:60] if raw else None
+    except Exception:
+        log.warning("llm_label_fallback_failed", cluster_type=cluster_type)
+        return None
+
+
+def get_cluster_label(
+    texts: list[str],
+    cluster_type: str,
+    language: str = "unknown",
+    groq_api_key: str = "",
+    model: str = "llama3-70b-8192",
+) -> str:
+    """Extract a meaningful label from cluster texts using TF-IDF.
+
+    If the TF-IDF result is too generic (only stopwords or common app terms),
+    falls back to a short LLM-generated label when groq_api_key is provided.
+    """
+    fallback = f"{cluster_type.title()} Cluster"
+
+    if not texts:
+        return fallback
+
+    tfidf_label: Optional[str] = None
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer
 
         stop_words = list(COMBINED_STOP_WORDS)
-
         vectorizer = TfidfVectorizer(
             max_features=50,
             stop_words=stop_words,
@@ -278,19 +370,33 @@ def get_cluster_label(texts: list[str], cluster_type: str, language: str = "unkn
         tfidf_matrix = vectorizer.fit_transform(texts)
         feature_names = vectorizer.get_feature_names_out()
 
-        # Sum scores across documents to rank by corpus-level importance
         scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
         top_indices = scores.argsort()[::-1][:3]
         terms = [feature_names[i] for i in top_indices if scores[i] > 0]
 
-        if not terms:
-            return f"{cluster_type.title()} Cluster"
-
-        return " / ".join(terms)
+        if terms:
+            tfidf_label = " / ".join(terms)
 
     except Exception:
-        log.warning("cluster_label_failed", texts_count=len(texts))
-        return f"{cluster_type.title()} Cluster"
+        log.warning("cluster_label_tfidf_failed", texts_count=len(texts))
+
+    # Quality check: if TF-IDF produced something useful, use it
+    if tfidf_label and is_label_meaningful(tfidf_label):
+        return tfidf_label
+
+    # Label is generic or missing — try LLM
+    if groq_api_key:
+        log.info(
+            "cluster_label_llm_fallback",
+            tfidf_label=tfidf_label,
+            cluster_type=cluster_type,
+        )
+        llm_label = _generate_label_with_llm(texts, cluster_type, language, groq_api_key, model)
+        if llm_label and llm_label.strip():
+            return llm_label
+
+    # Final fallback: use TF-IDF result even if generic, or the default string
+    return tfidf_label or fallback
 
 
 def generate_cluster_summary(

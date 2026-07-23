@@ -74,6 +74,8 @@ def _build_clusters(
             [r.content for r in member_reviews],
             cluster_type.value,
             dominant_language,
+            groq_api_key=settings.GROQ_API_KEY,
+            model=settings.GROQ_MODEL,
         )
 
         summary = None

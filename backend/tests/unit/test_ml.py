@@ -13,8 +13,10 @@ from app.pipeline.ml import (
     clean_text,
     detect_language,
     get_cluster_label,
+    is_label_meaningful,
     optimal_cluster_count,
     COMBINED_STOP_WORDS,
+    GENERIC_APP_TERMS,
     EMBEDDING_DIM,
 )
 
@@ -206,6 +208,55 @@ class TestStopWords:
 
 def test_embedding_dim():
     assert EMBEDDING_DIM == 384
+
+
+# ---------------------------------------------------------------------------
+# is_label_meaningful
+# ---------------------------------------------------------------------------
+
+class TestIsLabelMeaningful:
+    def test_fallback_string_is_not_meaningful(self):
+        assert not is_label_meaningful("Issue Cluster")
+        assert not is_label_meaningful("Strength Cluster")
+
+    def test_specific_label_is_meaningful(self):
+        assert is_label_meaningful("battery drain")
+        assert is_label_meaningful("login crash / authentication")
+        assert is_label_meaningful("offline mode / sync")
+
+    def test_all_generic_terms_not_meaningful(self):
+        # Every word in GENERIC_APP_TERMS
+        assert not is_label_meaningful("app / update / version")
+        assert not is_label_meaningful("good / great / nice")
+
+    def test_identical_terms_not_meaningful(self):
+        assert not is_label_meaningful("app / app / app")
+
+    def test_empty_string_not_meaningful(self):
+        assert not is_label_meaningful("")
+
+    def test_mixed_specific_and_generic_is_meaningful(self):
+        # "crash" is not in GENERIC_APP_TERMS → meaningful
+        assert is_label_meaningful("crash / app")
+
+    def test_german_generic_terms_not_meaningful(self):
+        assert not is_label_meaningful("gut / super / toll")
+
+
+# ---------------------------------------------------------------------------
+# GENERIC_APP_TERMS sanity checks
+# ---------------------------------------------------------------------------
+
+class TestGenericAppTerms:
+    def test_contains_common_words(self):
+        assert "app" in GENERIC_APP_TERMS
+        assert "update" in GENERIC_APP_TERMS
+        assert "good" in GENERIC_APP_TERMS
+
+    def test_does_not_contain_specific_words(self):
+        assert "crash" not in GENERIC_APP_TERMS
+        assert "battery" not in GENERIC_APP_TERMS
+        assert "bluetooth" not in GENERIC_APP_TERMS
 
 
 # ---------------------------------------------------------------------------
