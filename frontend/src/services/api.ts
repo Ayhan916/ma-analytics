@@ -142,6 +142,26 @@ export const ticketsApi = {
   },
 }
 
+// Search
+export const searchApi = {
+  search: async (params: {
+    datasource_id: string
+    q: string
+    search_type?: string
+    rerank?: boolean
+    limit?: number
+    sentiment?: string
+  }) => {
+    const p: Record<string, string> = { datasource_id: params.datasource_id, q: params.q }
+    if (params.search_type) p.search_type = params.search_type
+    if (params.rerank !== undefined) p.rerank = String(params.rerank)
+    if (params.limit !== undefined) p.limit = String(params.limit)
+    if (params.sentiment) p.sentiment = params.sentiment
+    const { data } = await apiClient.get(`/search?${new URLSearchParams(p)}`)
+    return data
+  },
+}
+
 // Messages
 export const messagesApi = {
   list: async (sentiment?: string) => {
