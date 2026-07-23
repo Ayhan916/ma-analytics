@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 import structlog
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -91,6 +91,8 @@ VALID_SENTIMENTS = ["positive", "neutral", "negative"]
 @router.get("", response_model=list[MessageOut])
 async def list_messages(
     sentiment: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -100,7 +102,7 @@ async def list_messages(
     q = select(Message).where(Message.user_id == current_user.id)
     if sentiment:
         q = q.where(Message.sentiment == sentiment)
-    q = q.order_by(desc(Message.created_at))
+    q = q.order_by(desc(Message.created_at)).limit(limit).offset(offset)
 
     result = await db.execute(q)
     return [_to_out(m) for m in result.scalars().all()]

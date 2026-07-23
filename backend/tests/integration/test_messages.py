@@ -71,3 +71,33 @@ async def test_create_message_without_name_or_email(logged_in_client: AsyncClien
     body = resp.json()
     assert body["name"] is None
     assert body["email"] is None
+
+
+async def test_pagination_limit(logged_in_client: AsyncClient):
+    with patch("app.api.messages._detect_sentiment", return_value="neutral"):
+        for i in range(5):
+            await logged_in_client.post("/messages", json={"text": f"Message {i}"})
+
+    resp = await logged_in_client.get("/messages?limit=2&offset=0")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 2
+
+
+async def test_pagination_offset(logged_in_client: AsyncClient):
+    with patch("app.api.messages._detect_sentiment", return_value="neutral"):
+        for i in range(4):
+            await logged_in_client.post("/messages", json={"text": f"Paged message {i}"})
+
+    page1 = (await logged_in_client.get("/messages?limit=2&offset=0")).json()
+    page2 = (await logged_in_client.get("/messages?limit=2&offset=2")).json()
+    ids_p1 = {m["id"] for m in page1}
+    ids_p2 = {m["id"] for m in page2}
+    assert ids_p1.isdisjoint(ids_p2), "Pages must not overlap"
+
+
+async def test_pagination_invalid_limit_returns_422(logged_in_client: AsyncClient):
+    resp = await logged_in_client.get("/messages?limit=0")
+    assert resp.status_code == 422
+
+    resp = await logged_in_client.get("/messages?limit=201")
+    assert resp.status_code == 422

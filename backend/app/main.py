@@ -88,7 +88,8 @@ app.include_router(tickets.router)
 app.include_router(messages.router)
 app.include_router(search.router)
 
-if not settings.DEBUG:
-    settings.validate_production()
-
-log.info("startup", app=settings.APP_NAME, debug=settings.DEBUG)
+@app.on_event("startup")
+async def _startup() -> None:
+    if not settings.DEBUG:
+        settings.validate_production()
+    log.info("startup", app=settings.APP_NAME, debug=settings.DEBUG)
