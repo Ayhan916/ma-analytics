@@ -188,10 +188,11 @@ export const intelligenceApi = {
     const { data } = await apiClient.get(`/intelligence/matrix?datasource_id=${datasourceId}`)
     return data
   },
-  feature: async (datasourceId: string, feature: string, signalTypeFilter?: string, versionFilter?: string) => {
+  feature: async (datasourceId: string, feature: string, signalTypeFilter?: string, versionFilter?: string, sortBy?: string) => {
     const p = new URLSearchParams({ datasource_id: datasourceId, feature })
     if (signalTypeFilter) p.set('signal_type_filter', signalTypeFilter)
     if (versionFilter) p.set('version_filter', versionFilter)
+    if (sortBy) p.set('sort_by', sortBy)
     const { data } = await apiClient.get(`/intelligence/feature?${p}`)
     return data
   },
@@ -209,6 +210,10 @@ export const intelligenceApi = {
   },
   resolutionCheck: async (reviewId: string) => {
     const { data } = await apiClient.get(`/intelligence/review/${reviewId}/resolution-check`)
+    return data
+  },
+  similarHistory: async (reviewId: string) => {
+    const { data } = await apiClient.get(`/intelligence/review/${reviewId}/similar-history`)
     return data
   },
 }

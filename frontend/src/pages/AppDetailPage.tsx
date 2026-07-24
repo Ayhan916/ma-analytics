@@ -1232,6 +1232,7 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
   const [loading, setLoading]             = useState(true)
   const [signalTypeFilter, setSignalTypeFilter] = useState<string | null>(null)
   const [versionFilter, setVersionFilter] = useState<string | null>(null)
+  const [sortBy, setSortBy] = useState<string | null>(null)
   const [filteredSignals, setFilteredSignals] = useState<SentenceSignal[] | null>(null)
   const [loadingFilter, setLoadingFilter] = useState(false)
   const [filterError, setFilterError] = useState('')
@@ -1257,32 +1258,27 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feature, datasourceId])
 
-  // Filtered load when signal type or version filter changes
+  // Filtered/sorted load
   useEffect(() => {
-    if (!signalTypeFilter && !versionFilter) { setFilteredSignals(null); setFilterError(''); return }
+    if (!signalTypeFilter && !versionFilter && !sortBy) { setFilteredSignals(null); setFilterError(''); return }
     setLoadingFilter(true)
     setFilterError('')
-    intelligenceApi.feature(datasourceId, feature, signalTypeFilter ?? undefined, versionFilter ?? undefined)
+    intelligenceApi.feature(datasourceId, feature, signalTypeFilter ?? undefined, versionFilter ?? undefined, sortBy ?? undefined)
       .then((d: FeatureDetail) => setFilteredSignals(d.top_signals))
       .catch((e: unknown) => {
         const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? 'Filter fehlgeschlagen'
         setFilterError(msg)
       })
       .finally(() => setLoadingFilter(false))
-  }, [signalTypeFilter, versionFilter, feature, datasourceId])
+  }, [signalTypeFilter, versionFilter, sortBy, feature, datasourceId])
 
-  const hasFilter = !!(signalTypeFilter || versionFilter)
+  const hasFilter = !!(signalTypeFilter || versionFilter || sortBy)
   const displaySignals = filteredSignals ?? detail?.top_signals ?? []
 
-  const toggleSignalType = (st: string) => {
-    setSignalTypeFilter(prev => prev === st ? null : st)
-    setFilteredSignals(null)
-  }
-  const toggleVersion = (v: string) => {
-    setVersionFilter(prev => prev === v ? null : v)
-    setFilteredSignals(null)
-  }
-  const clearFilters = () => { setSignalTypeFilter(null); setVersionFilter(null); setFilteredSignals(null) }
+  const toggleSignalType = (st: string) => { setSignalTypeFilter(prev => prev === st ? null : st); setFilteredSignals(null) }
+  const toggleVersion    = (v: string)  => { setVersionFilter(prev => prev === v ? null : v);      setFilteredSignals(null) }
+  const toggleSort       = (s: string)  => { setSortBy(prev => prev === s ? null : s);             setFilteredSignals(null) }
+  const clearFilters = () => { setSignalTypeFilter(null); setVersionFilter(null); setSortBy(null); setFilteredSignals(null) }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -1378,15 +1374,39 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
 
             {/* Filter-Status + Signale */}
             <div>
+              {/* Sort chips */}
+              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                <span className="text-slate-600 text-[10px] mr-0.5">Sortierung:</span>
+                {([
+                  { key: 'datum_neu', label: 'Neueste' },
+                  { key: 'datum_alt', label: 'Älteste' },
+                  { key: 'version',   label: 'Version' },
+                  { key: 'bewertung', label: 'Bewertung' },
+                  { key: 'severity',  label: 'Schweregrad' },
+                ] as { key: string; label: string }[]).map(opt => (
+                  <button
+                    key={opt.key}
+                    onClick={() => toggleSort(opt.key)}
+                    className={`text-[10px] px-2 py-0.5 rounded-full border transition-all
+                      ${sortBy === opt.key
+                        ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/40'
+                        : 'text-slate-500 border-slate-700 hover:text-slate-300 hover:border-slate-500'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="flex items-center justify-between mb-2">
                 <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider">
                   {hasFilter ? `${loadingFilter ? '…' : displaySignals.length} Reviews` : 'Top Reviews'}
                   {signalTypeFilter && <span className="text-indigo-400 ml-1">· {SIGNAL_LABELS[signalTypeFilter] ?? signalTypeFilter}</span>}
                   {versionFilter && <span className="text-indigo-400 ml-1">· v{versionFilter}</span>}
+                  {sortBy && <span className="text-slate-500 ml-1">· sortiert</span>}
                 </p>
                 {hasFilter && (
                   <button onClick={clearFilters} className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-white transition-colors">
-                    <X size={10} /> Filter aufheben
+                    <X size={10} /> Alles zurücksetzen
                   </button>
                 )}
               </div>
@@ -1412,7 +1432,27 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
   )
 }
 
-// ─── Resolution Check Types ───────────────────────────────────────────────────
+// ─── Similar History + Resolution Check Types ────────────────────────────────
+
+interface SimilarOccurrence {
+  version: string | null
+  date: string | null
+  count: number
+  has_reply: boolean
+  example_content: string
+  reply_content: string | null
+  reply_at: string | null
+}
+
+interface SimilarHistoryResult {
+  review_id: string
+  feature: string | null
+  signal_type: string | null
+  total_similar: number
+  occurrences: SimilarOccurrence[]
+  has_any_reply: boolean
+  synthesis: string
+}
 
 interface ResolutionCheckResult {
   review_id: string
@@ -1435,28 +1475,40 @@ const VERDICT_STYLES: Record<string, { label: string; color: string; dot: string
   keine_daten:            { label: 'Keine Daten',            color: 'text-slate-400 bg-slate-800 border-slate-700',          dot: 'bg-slate-500'   },
 }
 
-function ReviewSignalCard({ signal: s, feature, versionFilter }: { signal: SentenceSignal; feature: string; versionFilter: string | null }) {
-  const [open, setOpen] = useState(false)
-  const [result, setResult] = useState<ResolutionCheckResult | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+function ReviewSignalCard({ signal: s, versionFilter }: { signal: SentenceSignal; feature: string; versionFilter: string | null }) {
+  const [openPanel, setOpenPanel] = useState<'resolution' | 'history' | null>(null)
 
-  const check = async () => {
-    if (result) { setOpen(o => !o); return }
-    setOpen(true)
-    setLoading(true)
-    setError('')
-    try {
-      const data = await intelligenceApi.resolutionCheck(s.review_id)
-      setResult(data)
-    } catch {
-      setError('Analyse fehlgeschlagen.')
-    } finally {
-      setLoading(false)
-    }
+  // Resolution check state
+  const [resolution, setResolution] = useState<ResolutionCheckResult | null>(null)
+  const [loadingRes, setLoadingRes] = useState(false)
+  const [errorRes, setErrorRes] = useState('')
+
+  // Similar history state
+  const [history, setHistory] = useState<SimilarHistoryResult | null>(null)
+  const [loadingHist, setLoadingHist] = useState(false)
+  const [errorHist, setErrorHist] = useState('')
+
+  const openResolution = async () => {
+    if (openPanel === 'resolution') { setOpenPanel(null); return }
+    setOpenPanel('resolution')
+    if (resolution) return
+    setLoadingRes(true); setErrorRes('')
+    try { setResolution(await intelligenceApi.resolutionCheck(s.review_id)) }
+    catch { setErrorRes('Analyse fehlgeschlagen.') }
+    finally { setLoadingRes(false) }
   }
 
-  const vs = result ? (VERDICT_STYLES[result.verdict] ?? VERDICT_STYLES.keine_daten) : null
+  const openHistory = async () => {
+    if (openPanel === 'history') { setOpenPanel(null); return }
+    setOpenPanel('history')
+    if (history) return
+    setLoadingHist(true); setErrorHist('')
+    try { setHistory(await intelligenceApi.similarHistory(s.review_id)) }
+    catch { setErrorHist('Verlauf konnte nicht geladen werden.') }
+    finally { setLoadingHist(false) }
+  }
+
+  const vs = resolution ? (VERDICT_STYLES[resolution.verdict] ?? VERDICT_STYLES.keine_daten) : null
 
   return (
     <div className="bg-slate-800/40 border border-white/5 rounded-lg overflow-hidden">
@@ -1471,69 +1523,71 @@ function ReviewSignalCard({ signal: s, feature, versionFilter }: { signal: Sente
           {!versionFilter && s.version && <span className="text-slate-600 text-[10px] font-mono">{s.version}</span>}
           {s.reviewed_at && <span className="text-slate-700 text-[10px] ml-auto">{s.reviewed_at}</span>}
           <button
-            onClick={check}
+            onClick={openResolution}
             title="Wurde dieses Problem behoben?"
             className={`ml-1 flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all
-              ${open ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/40' : 'text-slate-500 border-slate-700 hover:text-slate-300 hover:border-slate-500'}`}
+              ${openPanel === 'resolution' ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/40' : 'text-slate-500 border-slate-700 hover:text-slate-300 hover:border-slate-500'}`}
           >
             <Search size={9} />
             Behoben?
           </button>
+          <button
+            onClick={openHistory}
+            title="Kam so etwas früher schon mal vor?"
+            className={`flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border transition-all
+              ${openPanel === 'history' ? 'text-violet-300 bg-violet-500/15 border-violet-500/40' : 'text-slate-500 border-slate-700 hover:text-slate-300 hover:border-slate-500'}`}
+          >
+            <RefreshCw size={9} />
+            Verlauf?
+          </button>
         </div>
         <p className="text-slate-300 text-xs leading-relaxed">{s.review_content ?? s.text}</p>
-        {s.text && s.text !== feature && s.text !== s.review_content && (
-          <p className="text-indigo-400/60 text-[10px] mt-1.5 italic">↳ Aspekt: {s.text}</p>
-        )}
       </div>
 
-      {open && (
+      {/* Resolution panel */}
+      {openPanel === 'resolution' && (
         <div className="border-t border-white/[0.06] px-3 py-3 bg-slate-900/60 space-y-2.5">
-          {loading && (
-            <div className="flex items-center gap-2 text-slate-500 text-xs">
-              <RefreshCw size={11} className="animate-spin" /> Analysiere…
-            </div>
-          )}
-          {error && <p className="text-red-400 text-xs">{error}</p>}
-          {result && vs && (() => {
-            // Build structured evidence list
+          {loadingRes && <div className="flex items-center gap-2 text-slate-500 text-xs"><RefreshCw size={11} className="animate-spin" /> Analysiere…</div>}
+          {errorRes && <p className="text-red-400 text-xs">{errorRes}</p>}
+          {resolution && vs && (() => {
             const verdictEvidence: { icon: string; text: string; source: string; color: string }[] = []
             const confidenceReason: string[] = []
 
-            if (result.developer_reply) {
+            if (resolution.developer_reply) {
               verdictEvidence.push({
                 icon: '💬',
                 text: 'Hersteller hat direkt auf diesen Review geantwortet',
-                source: result.developer_reply_at ? `Quelle: Hersteller-Antwort vom ${result.developer_reply_at}` : 'Quelle: Hersteller-Antwort (Datum unbekannt)',
+                source: resolution.developer_reply_at ? `Quelle: Hersteller-Antwort vom ${resolution.developer_reply_at}` : 'Quelle: Hersteller-Antwort (Datum unbekannt)',
                 color: 'text-indigo-300',
               })
             }
-            if (result.resolution_signals_after > 0) {
+            if (resolution.resolution_signals_after > 0) {
               verdictEvidence.push({
                 icon: '✓',
-                text: `${result.resolution_signals_after} weitere Nutzer meldeten nach diesem Review eine Lösung für „${result.feature}"`,
-                source: `Quelle: ${result.resolution_signals_after} Resolution-Signale in review_signals (nach Review-Datum)`,
+                text: `${resolution.resolution_signals_after} weitere Nutzer meldeten nach diesem Review eine Lösung für „${resolution.feature}"`,
+                source: `Quelle: ${resolution.resolution_signals_after} Resolution-Signale in review_signals (nach Review-Datum)`,
                 color: 'text-emerald-400',
               })
             }
-            if (result.bug_count_newer_versions === 0 && result.bug_count_same_version > 0) {
+            if (resolution.bug_count_newer_versions === 0 && resolution.bug_count_same_version > 0) {
               verdictEvidence.push({
                 icon: '📉',
-                text: `Keine weiteren Bug-Meldungen für „${result.feature}" in neueren App-Versionen`,
-                source: `Quelle: 0 Bug-Signale nach Review-Datum (vorher: ${result.bug_count_same_version})`,
+                text: `Keine weiteren Bug-Meldungen für „${resolution.feature}" in neueren App-Versionen`,
+                source: `Quelle: 0 Bug-Signale nach Review-Datum (vorher: ${resolution.bug_count_same_version})`,
                 color: 'text-emerald-400',
               })
             }
-            if (result.bug_count_newer_versions > 0) {
+            if (resolution.bug_count_newer_versions > 0) {
               verdictEvidence.push({
                 icon: '⚠',
-                text: `„${result.feature}" wurde ${result.bug_count_newer_versions}× in neueren Versionen noch als Bug gemeldet`,
-                source: result.last_bug_version
-                  ? `Quelle: ${result.bug_count_newer_versions} Bug-Signale nach Review-Datum — letzter bekannter Fehlerbericht: v${result.last_bug_version}`
-                  : `Quelle: ${result.bug_count_newer_versions} Bug-Signale nach Review-Datum`,
+                text: `„${resolution.feature}" wurde ${resolution.bug_count_newer_versions}× in neueren Versionen noch als Bug gemeldet`,
+                source: resolution.last_bug_version
+                  ? `Quelle: ${resolution.bug_count_newer_versions} Bug-Signale nach Review-Datum — letzter bekannter Fehlerbericht: v${resolution.last_bug_version}`
+                  : `Quelle: ${resolution.bug_count_newer_versions} Bug-Signale nach Review-Datum`,
                 color: 'text-red-400',
               })
             }
-            if (result.bug_count_newer_versions === 0 && result.resolution_signals_after === 0 && !result.developer_reply) {
+            if (resolution.bug_count_newer_versions === 0 && resolution.resolution_signals_after === 0 && !resolution.developer_reply) {
               verdictEvidence.push({
                 icon: '—',
                 text: 'Keine direkten Hinweise auf Behebung oder weiteres Auftreten gefunden',
@@ -1541,41 +1595,31 @@ function ReviewSignalCard({ signal: s, feature, versionFilter }: { signal: Sente
                 color: 'text-slate-500',
               })
             }
-
-            // Confidence explanation
-            if (result.verdict === 'behoben') {
+            if (resolution.verdict === 'behoben') {
               confidenceReason.push('Hersteller-Antwort vorhanden UND keine neueren Bug-Meldungen → hohe Sicherheit')
-            } else if (result.verdict === 'wahrscheinlich_behoben') {
-              if (result.developer_reply && result.bug_count_newer_versions > 0)
+            } else if (resolution.verdict === 'wahrscheinlich_behoben') {
+              if (resolution.developer_reply && resolution.bug_count_newer_versions > 0)
                 confidenceReason.push('Hersteller hat geantwortet, aber ähnliche Fehler wurden danach noch gemeldet — daher nur „mittel"')
-              else if (!result.developer_reply)
+              else if (!resolution.developer_reply)
                 confidenceReason.push('Keine direkte Hersteller-Antwort — Schluss basiert nur auf indirekter Evidenz')
-            } else if (result.verdict === 'offen') {
-              confidenceReason.push(`Noch ${result.bug_count_newer_versions} Bug-Meldungen nach diesem Review — Problem scheint weiterhin zu bestehen`)
+            } else if (resolution.verdict === 'offen') {
+              confidenceReason.push(`Noch ${resolution.bug_count_newer_versions} Bug-Meldungen nach diesem Review — Problem scheint weiterhin zu bestehen`)
             } else {
               confidenceReason.push('Zu wenig Datenpunkte für eine verlässliche Aussage')
             }
-
             return (
               <>
-                {/* Verdict + Konfidenz */}
                 <div className="flex items-start gap-3">
                   <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full border shrink-0 ${vs.color}`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${vs.dot}`} />
                     {vs.label}
                   </span>
-                  <div>
-                    <p className="text-slate-500 text-[10px]">
-                      Konfidenz: <span className="text-slate-300 font-medium">{result.confidence}</span>
-                      <span className="text-slate-700"> · {confidenceReason[0]}</span>
-                    </p>
-                  </div>
+                  <p className="text-slate-500 text-[10px]">
+                    Konfidenz: <span className="text-slate-300 font-medium">{resolution.confidence}</span>
+                    <span className="text-slate-700"> · {confidenceReason[0]}</span>
+                  </p>
                 </div>
-
-                {/* KI-Synthese */}
-                <p className="text-slate-300 text-xs leading-relaxed">{result.synthesis}</p>
-
-                {/* Strukturierte Begründung */}
+                <p className="text-slate-300 text-xs leading-relaxed">{resolution.synthesis}</p>
                 <div className="space-y-1.5">
                   <p className="text-slate-600 text-[10px] font-semibold uppercase tracking-wider">Begründung & Quellen</p>
                   {verdictEvidence.map((e, i) => (
@@ -1585,19 +1629,74 @@ function ReviewSignalCard({ signal: s, feature, versionFilter }: { signal: Sente
                     </div>
                   ))}
                 </div>
-
-                {/* Hersteller-Antwort im Volltext */}
-                {result.developer_reply && (
+                {resolution.developer_reply && (
                   <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-lg px-3 py-2.5">
                     <p className="text-[10px] text-indigo-400 font-semibold mb-1.5">
-                      Hersteller-Antwort{result.developer_reply_at ? ` vom ${result.developer_reply_at}` : ''}
+                      Hersteller-Antwort{resolution.developer_reply_at ? ` vom ${resolution.developer_reply_at}` : ''}
                     </p>
-                    <p className="text-slate-300 text-xs leading-relaxed">{result.developer_reply}</p>
+                    <p className="text-slate-300 text-xs leading-relaxed">{resolution.developer_reply}</p>
                   </div>
                 )}
               </>
             )
           })()}
+        </div>
+      )}
+
+      {/* Similar history panel */}
+      {openPanel === 'history' && (
+        <div className="border-t border-white/[0.06] px-3 py-3 bg-slate-900/60 space-y-2.5">
+          {loadingHist && <div className="flex items-center gap-2 text-slate-500 text-xs"><RefreshCw size={11} className="animate-spin" /> Verlauf wird geladen…</div>}
+          {errorHist && <p className="text-red-400 text-xs">{errorHist}</p>}
+          {history && (
+            <>
+              {/* Header */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-semibold text-violet-300 bg-violet-500/10 border border-violet-500/30 px-2.5 py-1 rounded-full">
+                  {history.total_similar === 0 ? 'Erstmalig' : `${history.total_similar}× früher aufgetreten`}
+                </span>
+                {history.has_any_reply && (
+                  <span className="text-[10px] text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-full">
+                    Hersteller hat mind. 1× geantwortet
+                  </span>
+                )}
+              </div>
+
+              {/* KI-Synthese */}
+              <p className="text-slate-300 text-xs leading-relaxed">{history.synthesis}</p>
+
+              {/* Vorkommen nach Version */}
+              {history.occurrences.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-slate-600 text-[10px] font-semibold uppercase tracking-wider">
+                    Vorkommen nach Version
+                  </p>
+                  {history.occurrences.map((o, i) => (
+                    <div key={i} className="bg-slate-800/60 border border-white/[0.04] rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className="text-white text-[10px] font-mono font-medium">v{o.version ?? '?'}</span>
+                        {o.date && <span className="text-slate-500 text-[10px]">{o.date}</span>}
+                        <span className="text-slate-400 text-[10px]">{o.count}× gemeldet</span>
+                        {o.has_reply
+                          ? <span className="text-indigo-400 text-[10px] ml-auto">💬 Hersteller hat geantwortet</span>
+                          : <span className="text-slate-600 text-[10px] ml-auto">Keine Antwort</span>
+                        }
+                      </div>
+                      <p className="text-slate-400 text-[10px] leading-relaxed line-clamp-2">{o.example_content}</p>
+                      {o.reply_content && (
+                        <div className="mt-1.5 border-t border-white/[0.04] pt-1.5">
+                          <p className="text-[10px] text-indigo-400 font-medium mb-0.5">
+                            Hersteller{o.reply_at ? ` (${o.reply_at})` : ''}:
+                          </p>
+                          <p className="text-slate-300 text-[10px] leading-relaxed line-clamp-3">{o.reply_content}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

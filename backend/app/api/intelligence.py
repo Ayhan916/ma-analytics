@@ -212,6 +212,7 @@ async def get_feature_detail(
     feature: str,
     signal_type_filter: Optional[str] = None,
     version_filter: Optional[str] = None,
+    sort_by: Optional[str] = None,  # datum_neu | datum_alt | version | bewertung | severity
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -268,8 +269,8 @@ async def get_feature_detail(
         for r in vt.fetchall()
     ]
 
-    # Top signals — with optional signal_type and version filters
-    is_filtered = bool(signal_type_filter or version_filter)
+    # Top signals — with optional signal_type, version filters and sort
+    is_filtered = bool(signal_type_filter or version_filter or sort_by)
     row_limit = 100 if is_filtered else 30
     extra_where = ""
     params: dict = {"ds_id": datasource_id, "feat": feature}
@@ -279,12 +280,24 @@ async def get_feature_detail(
     if version_filter:
         extra_where += " AND COALESCE(rs.version_hint, rev.version) = :ver"
         params["ver"] = version_filter
+
+    order_clause = {
+        "datum_neu":  "rev.reviewed_at DESC NULLS LAST",
+        "datum_alt":  "rev.reviewed_at ASC NULLS LAST",
+        "version":    "COALESCE(rs.version_hint, rev.version) DESC NULLS LAST, rev.reviewed_at DESC NULLS LAST",
+        "bewertung":  "rev.score DESC NULLS LAST, rev.reviewed_at DESC NULLS LAST",
+        "severity":   "rs.severity DESC NULLS LAST, rev.reviewed_at DESC NULLS LAST",
+    }.get(sort_by or "", (
+        "CASE rs.signal_type WHEN 'bug' THEN 1 WHEN 'resolution' THEN 2 ELSE 3 END, "
+        "rs.severity DESC NULLS LAST, rev.reviewed_at DESC NULLS LAST"
+    ))
+
     sigs = await db.execute(
         text(f"""
             SELECT rs.id,
                    rev.id AS review_id,
                    COALESCE(NULLIF(asp.span_text, ''), rs.feature) AS text,
-                   LEFT(rev.content, 400) AS review_content,
+                   rev.content AS review_content,
                    rs.signal_type, rs.severity, rs.is_resolved,
                    COALESCE(rs.version_hint, rev.version) AS version,
                    rev.reviewed_at, rev.score
@@ -293,10 +306,7 @@ async def get_feature_detail(
             JOIN reviews rev ON rs.review_id = rev.id
             WHERE rs.datasource_id = :ds_id AND rs.feature = :feat
             {extra_where}
-            ORDER BY
-                CASE rs.signal_type WHEN 'bug' THEN 1 WHEN 'resolution' THEN 2 ELSE 3 END,
-                rs.severity DESC NULLS LAST,
-                rev.reviewed_at DESC NULLS LAST
+            ORDER BY {order_clause}
             LIMIT {row_limit}
         """),
         params,
@@ -682,5 +692,191 @@ async def get_resolution_check(
         bug_count_same_version=bug_count_same_version,
         bug_count_newer_versions=bug_count_newer_versions,
         last_bug_version=last_bug_version,
+        synthesis=synthesis,
+    )
+
+
+# ─── Similar History ──────────────────────────────────────────────────────────
+
+class SimilarOccurrence(BaseModel):
+    version: Optional[str]
+    date: Optional[str]
+    count: int
+    has_reply: bool
+    example_content: str
+    reply_content: Optional[str]
+    reply_at: Optional[str]
+
+
+class SimilarHistoryResult(BaseModel):
+    review_id: str
+    feature: Optional[str]
+    signal_type: Optional[str]
+    total_similar: int
+    occurrences: list[SimilarOccurrence]
+    has_any_reply: bool
+    synthesis: str
+
+
+def _groq_similar_synthesis(
+    feature: Optional[str],
+    signal_type: Optional[str],
+    total: int,
+    occurrences: list[dict],
+    groq_api_key: str,
+) -> str:
+    if not total:
+        return "Dieses Problem wurde in der Vergangenheit nicht gemeldet — es handelt sich um einen erstmaligen Bericht."
+
+    with_reply = [o for o in occurrences if o["has_reply"]]
+    versions = [o["version"] for o in occurrences if o["version"]]
+
+    occ_lines = "\n".join(
+        f'- v{o["version"] or "?"} ({o["date"] or "?"}) — {o["count"]}× gemeldet'
+        + (f', Hersteller hat geantwortet: "{o["reply_content"][:150]}"' if o["reply_content"] else "")
+        for o in occurrences[:8]
+    )
+
+    prompt = (
+        f"Du analysierst die Verlaufshistorie eines App-Problems.\n\n"
+        f"Feature: {feature or 'unbekannt'} | Signal-Typ: {signal_type or 'unbekannt'}\n"
+        f"Gesamtanzahl ähnlicher Berichte: {total}\n"
+        f"Vorkommen nach Version:\n{occ_lines}\n\n"
+        "Beantworte auf Deutsch in 2–3 Sätzen:\n"
+        "1. Wie oft und in welchen Versionen trat das Problem auf?\n"
+        "2. Hat der Hersteller jemals darauf geantwortet?\n"
+        "3. Zeigt der Trend Besserung oder Verschlechterung?"
+    )
+    try:
+        from groq import Groq
+        resp = Groq(api_key=groq_api_key).chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        if not with_reply:
+            return f"Ähnliche Probleme wurden {total}× in {len(occurrences)} Versionen gemeldet. Der Hersteller hat auf keinen dieser Berichte geantwortet."
+        return (
+            f"Ähnliche Probleme wurden {total}× gemeldet. "
+            f"In {len(with_reply)} Version(en) antwortete der Hersteller, zuletzt: \"{with_reply[0]['reply_content'][:120]}\""
+        )
+
+
+@router.get("/review/{review_id}/similar-history", response_model=SimilarHistoryResult)
+async def get_similar_history(
+    review_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find past occurrences of similar issues for the same feature."""
+    # Verify ownership + get review metadata
+    rev_row = await db.execute(
+        text("""
+            SELECT rev.id, rev.datasource_id, rev.reviewed_at, rev.embedding::text AS emb_raw
+            FROM reviews rev
+            JOIN datasources ds ON rev.datasource_id = ds.id
+            WHERE rev.id = :rid AND ds.user_id = :uid
+        """),
+        {"rid": review_id, "uid": current_user.id},
+    )
+    rev = rev_row.one_or_none()
+    if not rev:
+        raise HTTPException(status_code=404, detail="Review not found")
+
+    datasource_id = rev.datasource_id
+
+    # Get dominant feature + signal_type for this review
+    sig_row = await db.execute(
+        text("""
+            SELECT feature, signal_type, COUNT(*) AS cnt
+            FROM review_signals
+            WHERE review_id = :rid AND feature != 'General'
+            GROUP BY feature, signal_type
+            ORDER BY cnt DESC LIMIT 1
+        """),
+        {"rid": review_id},
+    )
+    sig = sig_row.one_or_none()
+    feature = sig.feature if sig else None
+    signal_type = sig.signal_type if sig else None
+
+    if not feature:
+        return SimilarHistoryResult(
+            review_id=review_id, feature=None, signal_type=None,
+            total_similar=0, occurrences=[], has_any_reply=False,
+            synthesis="Kein Feature-Kontext gefunden — Verlaufsanalyse nicht möglich.",
+        )
+
+    # Count total similar signals (same feature + signal_type, excluding this review)
+    total_row = await db.execute(
+        text("""
+            SELECT COUNT(*) FROM review_signals rs
+            WHERE rs.datasource_id = :ds AND rs.feature = :feat
+              AND rs.signal_type = :stype AND rs.review_id != :rid
+        """),
+        {"ds": datasource_id, "feat": feature, "stype": signal_type, "rid": review_id},
+    )
+    total_similar = total_row.scalar() or 0
+
+    # Group by version — count, date, reply info
+    groups = await db.execute(
+        text("""
+            SELECT
+                COALESCE(rs.version_hint, rev.version, 'unbekannt') AS version,
+                MIN(rev.reviewed_at)::date::text                     AS first_date,
+                COUNT(*)                                             AS cnt,
+                BOOL_OR(rev.reply_content IS NOT NULL)               AS has_reply,
+                (ARRAY_AGG(rev.content ORDER BY rev.reviewed_at DESC))[1] AS example_content,
+                (ARRAY_AGG(rev.reply_content ORDER BY rev.reviewed_at DESC)
+                    FILTER (WHERE rev.reply_content IS NOT NULL))[1]  AS reply_content,
+                (ARRAY_AGG(rev.reply_at::date::text ORDER BY rev.reviewed_at DESC)
+                    FILTER (WHERE rev.reply_at IS NOT NULL))[1]        AS reply_at,
+                MIN(rev.reviewed_at)                                  AS sort_date
+            FROM review_signals rs
+            JOIN reviews rev ON rs.review_id = rev.id
+            WHERE rs.datasource_id = :ds AND rs.feature = :feat
+              AND rs.signal_type = :stype AND rs.review_id != :rid
+            GROUP BY COALESCE(rs.version_hint, rev.version, 'unbekannt')
+            ORDER BY sort_date DESC
+            LIMIT 20
+        """),
+        {"ds": datasource_id, "feat": feature, "stype": signal_type, "rid": review_id},
+    )
+    occurrences = [
+        SimilarOccurrence(
+            version=r.version,
+            date=r.first_date,
+            count=r.cnt,
+            has_reply=r.has_reply or False,
+            example_content=r.example_content or "",
+            reply_content=r.reply_content,
+            reply_at=r.reply_at,
+        )
+        for r in groups.fetchall()
+    ]
+
+    has_any_reply = any(o.has_reply for o in occurrences)
+
+    from app.core.config import settings
+    import asyncio
+    synthesis = await asyncio.to_thread(
+        _groq_similar_synthesis,
+        feature,
+        signal_type,
+        total_similar,
+        [o.model_dump() for o in occurrences],
+        settings.GROQ_API_KEY,
+    )
+
+    return SimilarHistoryResult(
+        review_id=review_id,
+        feature=feature,
+        signal_type=signal_type,
+        total_similar=total_similar,
+        occurrences=occurrences,
+        has_any_reply=has_any_reply,
         synthesis=synthesis,
     )
