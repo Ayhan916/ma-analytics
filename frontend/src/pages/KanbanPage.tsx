@@ -200,9 +200,10 @@ function NewTicketForm({ onCreated }: { onCreated: (t: Ticket) => void }) {
 export function KanbanPage() {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [selected, setSelected] = useState<Ticket | null>(null)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
-    ticketsApi.list().then(setTickets).catch(() => {})
+    ticketsApi.list().then(setTickets).catch(() => setLoadError(true))
   }, [])
 
   const byStatus = (status: Status) => tickets.filter(t => t.status === status)
@@ -227,6 +228,12 @@ export function KanbanPage() {
           <h1 className="text-white text-2xl font-bold">Kanban Board</h1>
           <p className="text-slate-400 text-sm mt-1">{tickets.length} tickets total</p>
         </div>
+
+        {loadError && (
+          <div className="mb-4 bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-center">
+            <p className="text-red-400 text-sm">Tickets konnten nicht geladen werden. Bitte Seite neu laden.</p>
+          </div>
+        )}
 
         <div className="flex-1 overflow-x-auto">
           <div className="flex gap-4 h-full min-w-max">

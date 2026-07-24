@@ -143,7 +143,7 @@ export function DataSourcesPage() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = async () => {
-    try { setSources(await datasourceApi.list()) } catch {}
+    try { setSources(await datasourceApi.list()) } catch { setError('Datenquellen konnten nicht geladen werden.') }
   }
 
   useEffect(() => {
@@ -202,7 +202,7 @@ export function DataSourcesPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this data source and all its data?')) return
-    try { await datasourceApi.delete(id); await load() } catch {}
+    try { await datasourceApi.delete(id); await load() } catch { setError('Löschen fehlgeschlagen. Bitte erneut versuchen.') }
   }
 
   const handleRetry = async (id: string) => {

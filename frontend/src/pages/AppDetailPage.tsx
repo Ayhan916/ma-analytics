@@ -318,6 +318,7 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
   const [summary, setSummary]       = useState<Summary | null>(null)
   const [matrix, setMatrix]         = useState<FeatureMatrix | null>(null)
   const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState(false)
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null)
 
   useEffect(() => {
@@ -326,11 +327,16 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
       intelligenceApi.matrix(datasourceId).catch(() => null),
     ])
       .then(([s, m]) => { setSummary(s); setMatrix(m) })
-      .catch(() => {})
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false))
   }, [datasourceId])
 
   if (loading) return <Spinner />
+  if (loadError) return (
+    <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-6 text-center m-6">
+      <p className="text-red-400 text-sm">Daten konnten nicht geladen werden. Bitte Seite neu laden.</p>
+    </div>
+  )
   if (!summary) return <Empty text="No data available yet." />
 
   const { review_count, avg_rating, sentiment } = summary

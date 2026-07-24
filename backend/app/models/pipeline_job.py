@@ -27,6 +27,7 @@ class PipelineJob(Base):
     error: Mapped[str] = mapped_column(Text, nullable=True)
     review_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
     datasource: Mapped["DataSource"] = relationship(back_populates="jobs")

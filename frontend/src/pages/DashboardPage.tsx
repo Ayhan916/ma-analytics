@@ -255,11 +255,12 @@ function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: numb
 export function DashboardPage() {
   const [report, setReport]   = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError]     = useState('')
 
   useEffect(() => {
     dashboardApi.competitive()
       .then(setReport)
-      .catch(() => {})
+      .catch(() => setError('Dashboard konnte nicht geladen werden. Bitte Seite neu laden.'))
       .finally(() => setLoading(false))
   }, [])
 
@@ -281,6 +282,10 @@ export function DashboardPage() {
         {loading ? (
           <div className="flex items-center justify-center py-24">
             <RefreshCw size={22} className="text-slate-600 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-6 text-center">
+            <p className="text-red-400 text-sm">{error}</p>
           </div>
         ) : !report || report.apps.length === 0 ? (
           <EmptyState />

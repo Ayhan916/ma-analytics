@@ -8,6 +8,7 @@ import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { DataSourcesPage } from './pages/DataSourcesPage'
 import { AppDetailPage } from './pages/AppDetailPage'
+import { SearchPage } from './pages/SearchPage'
 import { InboxPage } from './pages/InboxPage'
 import { KanbanPage } from './pages/KanbanPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/datasources" element={<ProtectedRoute><DataSourcesPage /></ProtectedRoute>} />
           <Route path="/datasources/:id" element={<ProtectedRoute><AppDetailPage /></ProtectedRoute>} />
+          <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
           <Route path="/inbox" element={<ProtectedRoute><InboxPage /></ProtectedRoute>} />
           <Route path="/kanban" element={<ProtectedRoute><KanbanPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />

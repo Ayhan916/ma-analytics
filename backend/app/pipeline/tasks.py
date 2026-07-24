@@ -46,8 +46,11 @@ def _update_job(db, job_id: str, status: JobStatus, progress: str = None, error:
         job.progress = progress
     if error is not None:
         job.error = error
+    now = datetime.now(timezone.utc)
+    if status == JobStatus.running and job.started_at is None:
+        job.started_at = now
     if status in (JobStatus.done, JobStatus.failed):
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = now
     db.commit()
 
 

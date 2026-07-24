@@ -102,11 +102,17 @@ export function InboxPage() {
   const [ticketsCreated, setTicketsCreated] = useState<number | null>(null)
   const [replySent, setReplySent] = useState(false)
   const [sendError, setSendError] = useState('')
+  const [loadError, setLoadError] = useState(false)
 
   const load = async (sentimentFilter: SentimentFilter) => {
-    const sentiment = sentimentFilter === 'all' ? undefined : sentimentFilter
-    const list = await messagesApi.list(sentiment).catch(() => [])
-    setMessages(list)
+    setLoadError(false)
+    try {
+      const sentiment = sentimentFilter === 'all' ? undefined : sentimentFilter
+      const list = await messagesApi.list(sentiment)
+      setMessages(list)
+    } catch {
+      setLoadError(true)
+    }
   }
 
   useEffect(() => { load(filter) }, [filter])
@@ -179,7 +185,11 @@ export function InboxPage() {
             ))}
           </div>
           <div className="flex-1 overflow-y-auto">
-            {messages.length === 0 ? (
+            {loadError ? (
+              <div className="p-4 m-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-xs text-center">
+                Nachrichten konnten nicht geladen werden.
+              </div>
+            ) : messages.length === 0 ? (
               <div className="p-6 text-center text-slate-500 text-sm">No messages yet.<br />Click + New to add one.</div>
             ) : messages.map(m => (
               <button key={m.id} onClick={() => handleSelect(m)}
