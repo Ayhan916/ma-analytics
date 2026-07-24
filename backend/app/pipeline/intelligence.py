@@ -291,42 +291,128 @@ def _rate_limited_call(fn, groq_api_key: str):
     return fn(entry["key"])
 
 
+def _semver_key(v: str) -> tuple:
+    parts = re.findall(r"\d+", v)
+    return tuple(int(p) for p in parts[:4]) + (0,) * (4 - len(parts[:4]))
+
+
 def synthesize_feature_narrative(
     feature: str,
     signal_rows: list[dict],
     groq_api_key: str,
     model: str = "llama-3.3-70b-versatile",
 ) -> Optional[str]:
-    """Generate a concise narrative for one feature based on its aspects/signals."""
+    """Generate a version-anchored status narrative for one feature."""
     if not signal_rows or not groq_api_key:
         return None
 
-    bugs = [r for r in signal_rows if r["signal_type"] == "bug"]
-    resolved = [r for r in signal_rows if r.get("is_resolved")]
-    requests = [r for r in signal_rows if r["signal_type"] == "feature_request"]
+    # --- Build version timeline ---
+    from collections import defaultdict
 
-    def fmt(rows, limit=8):
-        return "\n".join(
-            f'- [{r.get("version") or "?"}] {r["text"][:200]}'
-            for r in rows[:limit]
-        )
+    version_data: dict = defaultdict(lambda: {
+        "bugs": 0, "resolutions": 0, "feature_requests": 0,
+        "total": 0, "has_reply": False, "date": None,
+    })
 
-    section = f"Feature: {feature}\nTotal mentions: {len(signal_rows)}\n"
-    if bugs:
-        section += f"\nBug reports ({len(bugs)}):\n{fmt(bugs)}"
-    if resolved:
-        section += f"\nResolutions ({len(resolved)}):\n{fmt(resolved)}"
-    if requests:
-        section += f"\nFeature requests ({len(requests)}):\n{fmt(requests)}"
+    for r in signal_rows:
+        v = (r.get("version") or "").strip() or "unknown"
+        sig = r.get("signal_type", "")
+        version_data[v]["total"] += 1
+        if sig in ("bug", "performance", "ux"):
+            version_data[v]["bugs"] += 1
+        elif sig == "resolution":
+            version_data[v]["resolutions"] += 1
+        elif sig == "feature_request":
+            version_data[v]["feature_requests"] += 1
+        if r.get("has_reply"):
+            version_data[v]["has_reply"] = True
+        date = r.get("reviewed_at")
+        if date and not version_data[v]["date"]:
+            version_data[v]["date"] = str(date)[:10]
+
+    known_versions = sorted(
+        [v for v in version_data if v != "unknown"],
+        key=_semver_key,
+    )
+
+    latest_version = known_versions[-1] if known_versions else None
+    bug_versions = [v for v in known_versions if version_data[v]["bugs"] > 0]
+    first_bug_version = bug_versions[0] if bug_versions else None
+    last_bug_version = bug_versions[-1] if bug_versions else None
+    peak_bug_version = (
+        max(bug_versions, key=lambda v: version_data[v]["bugs"]) if bug_versions else None
+    )
+
+    # Resolution evidence: drop in bugs or dev-reply after last bug version
+    resolution_evidence: list[str] = []
+    if last_bug_version and latest_version and last_bug_version != latest_version:
+        last_idx = known_versions.index(last_bug_version)
+        versions_after = known_versions[last_idx + 1:]
+        if any(version_data[v]["resolutions"] > 0 for v in versions_after):
+            resolution_evidence.append("Positive Nutzermeldungen nach letztem Bug")
+        if any(version_data[v]["has_reply"] for v in versions_after):
+            resolution_evidence.append("Entwickler-Reply nach letztem Bug vorhanden")
+        gaps_without_bug = len(versions_after)
+        if gaps_without_bug >= 2:
+            resolution_evidence.append(
+                f"Keine Bug-Meldungen in {gaps_without_bug} neueren Versionen"
+            )
+
+    # Timeline string — cap at 15 most relevant versions
+    display_versions = known_versions[-15:] if len(known_versions) > 15 else known_versions
+    timeline_lines = []
+    for v in display_versions:
+        d = version_data[v]
+        parts = [f"v{v}"]
+        if d["date"]:
+            parts.append(f"({d['date'][:7]})")
+        counts = []
+        if d["bugs"]:
+            counts.append(f"{d['bugs']} Bugs")
+        if d["resolutions"]:
+            counts.append(f"{d['resolutions']} Behebungen")
+        if d["feature_requests"]:
+            counts.append(f"{d['feature_requests']} Wünsche")
+        if d["has_reply"]:
+            counts.append("Dev-Reply ✓")
+        if counts:
+            parts.append(", ".join(counts))
+        timeline_lines.append(" | ".join(parts))
+
+    # Bug examples (from the most recent bug versions)
+    bug_rows = [r for r in signal_rows if r.get("signal_type") in ("bug", "performance", "ux")]
+    example_lines = "\n".join(
+        f'- [v{r.get("version") or "?"}] {r["text"][:150]}'
+        for r in bug_rows[:5]
+    )
+
+    context = f"""Feature: {feature}
+Aktuellste Version im Datensatz: {latest_version or "unbekannt"}
+Erste Bug-Meldung: {f"v{first_bug_version}" if first_bug_version else "keine"}
+Letzte Bug-Meldung: {f"v{last_bug_version}" if last_bug_version else "keine"}
+Peak der Bug-Meldungen: {f"v{peak_bug_version} ({version_data[peak_bug_version]['bugs']} Bugs)" if peak_bug_version else "—"}
+Behebungshinweise: {"; ".join(resolution_evidence) if resolution_evidence else "keine"}
+
+Versions-Timeline:
+{chr(10).join(timeline_lines) if timeline_lines else "(keine Versionsdaten)"}
+
+Beispielhafte Nutzermeldungen:
+{example_lines or "(keine)"}"""
 
     prompt = (
-        f"You analyze app review intelligence for the feature '{feature}'.\n\n"
-        f"{section}\n\n"
-        "Write a concise 2–3 sentence narrative covering:\n"
-        "1. What users most commonly report about this feature\n"
-        "2. Whether problems were fixed in later versions (cite versions if clear)\n"
-        "3. Any open issues or requests\n\n"
-        "Respond in German. Be specific and factual."
+        f"Du bist ein App-Qualitätsanalyst und analysierst das Feature '{feature}' "
+        f"einer mobilen App auf Basis von Nutzerbewertungen.\n\n"
+        f"{context}\n\n"
+        "Schreibe einen präzisen Status-Bericht (2–4 Sätze) aus der Perspektive der aktuellsten Version. "
+        "Beantworte dabei:\n"
+        "1. In welchen Versionen trat das Problem auf? Wann war die letzte bekannte Meldung?\n"
+        "2. Gibt es Hinweise auf eine Behebung (Rückgang der Meldungen, Dev-Antworten, Behebungs-Signale)?\n"
+        "3. Aktueller Status: explizit 'Offen', 'Wahrscheinlich behoben' oder 'Keine aktuellen Daten'.\n\n"
+        "Regeln:\n"
+        "- Verwende immer konkrete Versionsnummern.\n"
+        "- Formuliere 'zuletzt gemeldet in vX.Y.Z' statt 'noch immer in vX.Y.Z'.\n"
+        "- Wenn keine Bug-Meldungen vorhanden sind, beschreibe stattdessen was Nutzer positiv berichten.\n"
+        "- Antwort ausschließlich auf Deutsch."
     )
 
     try:
@@ -335,8 +421,8 @@ def synthesize_feature_narrative(
             return Groq(api_key=key).chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.3,
+                max_tokens=400,
+                temperature=0.2,
             )
         response = _rate_limited_call(_call, groq_api_key)
         return response.choices[0].message.content.strip()

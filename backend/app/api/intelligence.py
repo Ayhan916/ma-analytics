@@ -480,6 +480,33 @@ async def trigger_backfill_replies(
     return BackfillJob(job_id=job_id, message=f"Backfill gestartet — Job {job_id}")
 
 
+@router.post("/resynthesize", response_model=BackfillJob)
+async def trigger_resynthesize(
+    datasource_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-generate all Groq narratives without re-running ABSA."""
+    await _check_datasource(db, datasource_id, current_user.id)
+
+    from app.models.pipeline_job import PipelineJob, JobStatus
+    from app.pipeline.tasks import resynthesize_narratives
+
+    job_id = str(uuid.uuid4())
+    job = PipelineJob(
+        id=job_id,
+        datasource_id=datasource_id,
+        status=JobStatus.pending,
+        progress="queued",
+    )
+    db.add(job)
+    await db.commit()
+
+    resynthesize_narratives.delay(job_id, datasource_id)
+
+    return BackfillJob(job_id=job_id, message=f"Narrative-Synthese gestartet — Job {job_id}")
+
+
 # ─── Resolution Check ─────────────────────────────────────────────────────────
 
 class ResolutionCheck(BaseModel):

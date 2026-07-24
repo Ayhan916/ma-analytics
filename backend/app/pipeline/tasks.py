@@ -275,14 +275,21 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     db.commit()
     log.info("absa_done", total_aspects=total_aspects)
 
-    # --- Step 3: Narrative synthesis (Groq, ~20 calls) ---
+    # --- Step 3: Narrative synthesis ---
+    _run_narrative_synthesis(db, datasource_id, job_id=job_id)
+
+
+def _run_narrative_synthesis(db, datasource_id: str, job_id: str | None = None):
+    """Re-generate Groq narratives for all features of a datasource."""
+    from sqlalchemy import text as sql_text
+
     if not settings.GROQ_API_KEY:
         log.warning("intelligence_no_groq_key_skipping_narratives")
         return
 
-    _update_job(db, job_id, JobStatus.running, "intelligence_synthesizing_narratives")
+    if job_id:
+        _update_job(db, job_id, JobStatus.running, "intelligence_synthesizing_narratives")
 
-    from sqlalchemy import text as sql_text
     feature_rows = db.execute(
         sql_text("""
             SELECT feature, COUNT(*) AS mention_count, AVG(severity) AS avg_severity
@@ -301,13 +308,14 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
         signal_data = db.execute(
             sql_text("""
                 SELECT rs.signal_type, rs.severity, rs.is_resolved, rs.version_hint,
-                       asp.span_text AS text, rev.version, rev.reviewed_at
+                       asp.span_text AS text, rev.version, rev.reviewed_at,
+                       (rev.reply_content IS NOT NULL AND rev.reply_content <> '') AS has_reply
                 FROM review_signals rs
                 LEFT JOIN review_aspects asp ON rs.aspect_id = asp.id
                 JOIN reviews rev ON rs.review_id = rev.id
                 WHERE rs.datasource_id = :ds_id AND rs.feature = :feature
                 ORDER BY rev.reviewed_at DESC NULLS LAST
-                LIMIT 100
+                LIMIT 200
             """),
             {"ds_id": datasource_id, "feature": feature},
         ).fetchall()
@@ -320,6 +328,7 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
                 "is_resolved": r.is_resolved,
                 "version": r.version_hint or r.version,
                 "reviewed_at": str(r.reviewed_at)[:10] if r.reviewed_at else None,
+                "has_reply": bool(r.has_reply),
             }
             for r in signal_data
         ]
@@ -665,6 +674,28 @@ def backfill_replies(self, job_id: str, datasource_id: str, app_id: str, lang: s
     except Exception as exc:
         db.rollback()
         log.exception("backfill_replies_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.pipeline.tasks.resynthesize_narratives",
+    max_retries=2,
+    default_retry_delay=30,
+)
+def resynthesize_narratives(self, job_id: str, datasource_id: str):
+    """Re-generate all Groq narratives without re-running ABSA."""
+    db = SessionLocal()
+    try:
+        _update_job(db, job_id, JobStatus.running, "synthesizing_narratives")
+        _run_narrative_synthesis(db, datasource_id, job_id=job_id)
+        _update_job(db, job_id, JobStatus.done, "narratives_done")
+    except Exception as exc:
+        db.rollback()
+        log.exception("resynthesize_failed", job_id=job_id, error=str(exc))
         _update_job(db, job_id, JobStatus.failed, error=str(exc))
         raise
     finally:

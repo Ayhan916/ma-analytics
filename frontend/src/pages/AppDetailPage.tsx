@@ -312,60 +312,6 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
 // ─── ABSA Feature Overview (shared) ──────────────────────────────────────────
 
-function AbsaFeatureOverview({ datasourceId }: { datasourceId: string }) {
-  const [matrix, setMatrix] = useState<FeatureMatrix | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    intelligenceApi.matrix(datasourceId).then(setMatrix).catch(() => {}).finally(() => setLoading(false))
-  }, [datasourceId])
-
-  if (loading) return (
-    <div className="h-16 flex items-center justify-center">
-      <RefreshCw size={14} className="text-slate-700 animate-spin" />
-    </div>
-  )
-  if (!matrix || matrix.features.length === 0) return null
-
-  const top = matrix.features.slice(0, 8)
-  const maxMentions = Math.max(...top.map(f => f.total_mentions), 1)
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <Cpu size={14} className="text-indigo-400" />
-          <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">Feature Intelligence</p>
-        </div>
-        <span className="text-slate-600 text-xs">{matrix.n_topics} Features · {matrix.total_signals.toLocaleString()} Signale</span>
-      </div>
-      <div className="bg-slate-900 border border-white/10 rounded-xl divide-y divide-white/[0.04]">
-        {top.map(feat => {
-          const bugCount = feat.signal_types.find(s => s.signal_type === 'bug')?.count ?? 0
-          const negLike = feat.signal_types.filter(s => ['bug', 'performance', 'ux'].includes(s.signal_type)).reduce((a, s) => a + s.count, 0)
-          const negPct = feat.total_mentions > 0 ? Math.round((negLike / feat.total_mentions) * 100) : 0
-          const barW = Math.round((feat.total_mentions / maxMentions) * 100)
-          return (
-            <div key={feat.feature} className="px-4 py-2.5 flex items-center gap-3">
-              <p className="text-white text-xs font-medium w-24 shrink-0">{feat.feature}</p>
-              <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                <div className="h-full rounded-full bg-indigo-500/60" style={{ width: `${barW}%` }} />
-              </div>
-              <span className="text-slate-500 text-xs w-10 text-right shrink-0">{feat.total_mentions}×</span>
-              {bugCount > 0 && <span className="text-red-400 text-[10px] w-14 text-right shrink-0">{bugCount} bugs</span>}
-              {negPct > 0 && (
-                <span className={`text-[10px] w-14 text-right shrink-0 ${negPct > 60 ? 'text-red-400' : negPct > 30 ? 'text-amber-400' : 'text-slate-500'}`}>
-                  {negPct}% neg
-                </span>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 // ─── Tab: Overview ───────────────────────────────────────────────────────────
 
 function OverviewTab({ datasourceId }: { datasourceId: string }) {
@@ -405,14 +351,12 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
     }))
     .filter(f => f.bugLike > 0)
     .sort((a, b) => b.bugLike - a.bugLike)
-    .slice(0, 5)
 
   const absaStrengths = [...absaFeatures]
     .filter(f => f.feature !== 'General')
     .map(f => ({ ...f, resCount: f.signal_types.find(s => s.signal_type === 'resolution')?.count ?? 0 }))
     .filter(f => f.resCount > 0)
     .sort((a, b) => b.resCount - a.resCount)
-    .slice(0, 5)
 
   return (
     <div className="space-y-8">
@@ -486,8 +430,12 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
         </section>
       </div>
 
-      {/* Feature Health — alle Features als kompakte Balken */}
-      {useAbsa && <AbsaFeatureOverview datasourceId={datasourceId} />}
+      {/* ABSA stats summary */}
+      {useAbsa && matrix && (
+        <p className="text-slate-600 text-xs text-center">
+          {matrix.n_topics} Features analysiert · {matrix.total_signals.toLocaleString()} Signale
+        </p>
+      )}
 
       {/* Feature Detail Modal */}
       {selectedFeature && (
