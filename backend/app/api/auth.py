@@ -133,27 +133,6 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 
-async def _send_reset_email(email: str, token: str) -> None:
-    reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
-    if not settings.RESEND_API_KEY or not settings.RESEND_API_KEY.startswith("re_"):
-        logger.info("password_reset_link", email=email, url=reset_url)
-        return
-    try:
-        import resend
-        resend.api_key = settings.RESEND_API_KEY
-        resend.Emails.send({
-            "from": settings.EMAIL_FROM,
-            "to": email,
-            "subject": "Passwort zurücksetzen — MA Analytics",
-            "html": f"""
-                <p>Hallo,</p>
-                <p>du hast ein Passwort-Reset für dein MA Analytics-Konto angefordert.</p>
-                <p><a href="{reset_url}" style="background:#4f46e5;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;display:inline-block;">Passwort zurücksetzen</a></p>
-                <p>Dieser Link ist 1 Stunde gültig. Falls du kein Reset angefordert hast, kannst du diese E-Mail ignorieren.</p>
-            """,
-        })
-    except Exception as e:
-        logger.error("reset_email_failed", email=email, error=str(e))
 
 
 @router.post("/forgot-password", status_code=200)
@@ -170,7 +149,8 @@ async def forgot_password(request: Request, body: ForgotPasswordRequest, db: Asy
     user.reset_token_expires = datetime.now(timezone.utc) + timedelta(hours=1)
     await db.commit()
 
-    await _send_reset_email(user.email, plain_token)
+    from app.pipeline.tasks import send_reset_email
+    send_reset_email.delay(user.email, plain_token)
     return {"message": "If this email exists, a reset link has been sent."}
 
 

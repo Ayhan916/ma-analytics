@@ -3,6 +3,7 @@ import uuid
 import time
 import structlog
 from datetime import datetime, timezone
+from celery.exceptions import SoftTimeLimitExceeded
 from app.pipeline.celery_app import celery_app
 from app.pipeline.db import SessionLocal
 from app.pipeline.ml import (
@@ -26,6 +27,40 @@ from app.models.intelligence import ReviewAspect, ReviewSentence, ReviewSignal, 
 from app.core.config import settings
 
 log = structlog.get_logger(__name__)
+
+
+@celery_app.task(
+    name="app.pipeline.tasks.send_reset_email",
+    max_retries=2,
+    default_retry_delay=30,
+    time_limit=60,
+    soft_time_limit=55,
+)
+def send_reset_email(email: str, plain_token: str):
+    """Send password-reset email via Resend. Runs in background so the HTTP request returns immediately."""
+    from app.core.config import settings as _settings
+    reset_url = f"{_settings.FRONTEND_URL}/reset-password?token={plain_token}"
+    if not _settings.RESEND_API_KEY or not _settings.RESEND_API_KEY.startswith("re_"):
+        log.info("password_reset_link", email=email, url=reset_url)
+        return
+    try:
+        import resend
+        resend.api_key = _settings.RESEND_API_KEY
+        resend.Emails.send({
+            "from": _settings.EMAIL_FROM,
+            "to": email,
+            "subject": "Passwort zurücksetzen — MA Analytics",
+            "html": f"""
+                <p>Hallo,</p>
+                <p>du hast ein Passwort-Reset für dein MA Analytics-Konto angefordert.</p>
+                <p><a href="{reset_url}" style="background:#4f46e5;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;display:inline-block;">Passwort zurücksetzen</a></p>
+                <p>Dieser Link ist 1 Stunde gültig. Falls du kein Reset angefordert hast, kannst du diese E-Mail ignorieren.</p>
+            """,
+        })
+        log.info("reset_email_sent", email=email)
+    except Exception as exc:
+        log.error("reset_email_failed", email=email, error=str(exc))
+        raise
 
 # Minimum reviews per cluster to be meaningful
 MIN_CLUSTER_SIZE = 10
@@ -205,26 +240,22 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     """ABSA-First Intelligence Pipeline.
 
     Full review text → pyABSA → feature normalization → rule-based signals → Groq narratives.
+    New data is written BEFORE old data is deleted so a crash leaves the previous run intact.
     """
     log.info("absa_pipeline_start", datasource_id=datasource_id)
+
+    # Capture timestamp before any writes — used to identify old rows at cleanup
+    run_start = datetime.now(timezone.utc)
 
     reviews = db.query(Review).filter(Review.datasource_id == datasource_id).all()
     if not reviews:
         log.warning("intelligence_no_reviews", datasource_id=datasource_id)
         return
 
-    # --- Step 1: Clear old intelligence data ---
-    _update_job(db, job_id, JobStatus.running, "intelligence_clearing_old_data")
-    db.query(FeatureNarrative).filter(FeatureNarrative.datasource_id == datasource_id).delete()
-    db.query(ReviewSignal).filter(ReviewSignal.datasource_id == datasource_id).delete()
-    db.query(ReviewAspect).filter(ReviewAspect.datasource_id == datasource_id).delete()
-    db.query(ReviewSentence).filter(ReviewSentence.datasource_id == datasource_id).delete()
-    db.commit()
-
     # Snapshot review metadata before any DB ops
     review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in reviews}
 
-    # --- Step 2: ABSA aspect extraction ---
+    # --- Step 1: ABSA aspect extraction ---
     _update_job(db, job_id, JobStatus.running, "intelligence_absa_extracting")
     log.info("absa_start", n_reviews=len(reviews))
 
@@ -278,8 +309,29 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     db.commit()
     log.info("absa_done", total_aspects=total_aspects)
 
-    # --- Step 3: Narrative synthesis ---
+    # --- Step 2: Narrative synthesis ---
     _run_narrative_synthesis(db, datasource_id, job_id=job_id)
+
+    # --- Step 3: Remove previous-run data (safe — new data fully committed above) ---
+    _update_job(db, job_id, JobStatus.running, "intelligence_cleanup_old_data")
+    db.query(ReviewSignal).filter(
+        ReviewSignal.datasource_id == datasource_id,
+        ReviewSignal.created_at < run_start,
+    ).delete(synchronize_session=False)
+    db.query(ReviewAspect).filter(
+        ReviewAspect.datasource_id == datasource_id,
+        ReviewAspect.created_at < run_start,
+    ).delete(synchronize_session=False)
+    db.query(ReviewSentence).filter(
+        ReviewSentence.datasource_id == datasource_id,
+        ReviewSentence.created_at < run_start,
+    ).delete(synchronize_session=False)
+    db.query(FeatureNarrative).filter(
+        FeatureNarrative.datasource_id == datasource_id,
+        FeatureNarrative.generated_at < run_start,
+    ).delete(synchronize_session=False)
+    db.commit()
+    log.info("absa_cleanup_done", datasource_id=datasource_id, run_start=str(run_start))
 
 
 def _run_narrative_synthesis(db, datasource_id: str, job_id: str | None = None):
@@ -479,6 +531,8 @@ def _run_ml_pipeline(db, job_id: str, datasource_id: str):
     max_retries=3,
     default_retry_delay=60,
     autoretry_for=(ConnectionError, TimeoutError),
+    time_limit=7200,
+    soft_time_limit=6900,
 )
 def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: int, lang: str, country: str):
     db = SessionLocal()
@@ -596,11 +650,18 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
 
         _run_ml_pipeline(db, job_id, datasource_id)
 
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("scrape_task_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit and was stopped.")
+        raise
     except Exception as exc:
         db.rollback()
         log.exception("scrape_task_failed", job_id=job_id, error=str(exc))
         _update_job(db, job_id, JobStatus.failed, error=str(exc))
         raise
+    finally:
+        db.close()
 
 
 @celery_app.task(
@@ -608,6 +669,8 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
     name="app.pipeline.tasks.backfill_replies",
     max_retries=2,
     default_retry_delay=60,
+    time_limit=3600,
+    soft_time_limit=3540,
 )
 def backfill_replies(self, job_id: str, datasource_id: str, app_id: str, lang: str, country: str):
     """Re-scrape Google Play to fill reply_content/reply_at for existing reviews."""
@@ -674,6 +737,11 @@ def backfill_replies(self, job_id: str, datasource_id: str, app_id: str, lang: s
         _update_job(db, job_id, JobStatus.done, f"backfill_done_updated_{updated}")
         log.info("backfill_replies_done", processed=processed, updated=updated)
 
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("backfill_replies_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit and was stopped.")
+        raise
     except Exception as exc:
         db.rollback()
         log.exception("backfill_replies_failed", job_id=job_id, error=str(exc))
@@ -688,6 +756,8 @@ def backfill_replies(self, job_id: str, datasource_id: str, app_id: str, lang: s
     name="app.pipeline.tasks.resynthesize_narratives",
     max_retries=2,
     default_retry_delay=30,
+    time_limit=1800,
+    soft_time_limit=1740,
 )
 def resynthesize_narratives(self, job_id: str, datasource_id: str):
     """Re-generate all Groq narratives without re-running ABSA."""
@@ -696,6 +766,11 @@ def resynthesize_narratives(self, job_id: str, datasource_id: str):
         _update_job(db, job_id, JobStatus.running, "synthesizing_narratives")
         _run_narrative_synthesis(db, datasource_id, job_id=job_id)
         _update_job(db, job_id, JobStatus.done, "narratives_done")
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("resynthesize_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit and was stopped.")
+        raise
     except Exception as exc:
         db.rollback()
         log.exception("resynthesize_failed", job_id=job_id, error=str(exc))
@@ -710,12 +785,19 @@ def resynthesize_narratives(self, job_id: str, datasource_id: str):
     name="app.pipeline.tasks.run_pipeline",
     max_retries=2,
     default_retry_delay=30,
+    time_limit=3600,
+    soft_time_limit=3540,
 )
 def run_pipeline(self, job_id: str, datasource_id: str):
     db = SessionLocal()
     try:
         _update_job(db, job_id, JobStatus.running, "loading_reviews")
         _run_ml_pipeline(db, job_id, datasource_id)
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("pipeline_task_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit and was stopped.")
+        raise
     except Exception as exc:
         db.rollback()
         log.exception("pipeline_task_failed", job_id=job_id, error=str(exc))
