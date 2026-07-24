@@ -177,6 +177,7 @@ def extract_version_hint(text: str) -> Optional[str]:
 def extract_aspects_from_reviews(
     reviews: list,
     batch_size: int = 32,
+    on_progress: "callable | None" = None,
 ) -> list[list[dict]]:
     """Run pyABSA on full review texts.
 
@@ -189,7 +190,8 @@ def extract_aspects_from_reviews(
     texts = [r.content[:512] if r.content else "" for r in reviews]
     raw_results: list = []
 
-    for i in range(0, len(texts), batch_size):
+    total = len(texts)
+    for i in range(0, total, batch_size):
         batch = texts[i : i + batch_size]
         try:
             results = extractor.predict(batch, print_result=False)
@@ -199,6 +201,8 @@ def extract_aspects_from_reviews(
         except Exception as exc:
             log.warning("absa_batch_error", start=i, error=str(exc)[:200])
             raw_results.extend([None] * len(batch))
+        if on_progress and total > 0:
+            on_progress(min(int(100 * (i + len(batch)) / total), 99))
 
     per_review: list[list[dict]] = []
 

@@ -259,7 +259,10 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     _update_job(db, job_id, JobStatus.running, "intelligence_absa_extracting")
     log.info("absa_start", n_reviews=len(reviews))
 
-    all_review_aspects = extract_aspects_from_reviews(reviews, batch_size=32)
+    def _absa_progress(pct: int):
+        _update_job(db, job_id, JobStatus.running, f"intelligence_absa_{pct}pct")
+
+    all_review_aspects = extract_aspects_from_reviews(reviews, batch_size=32, on_progress=_absa_progress)
 
     total_aspects = 0
     for review, aspects in zip(reviews, all_review_aspects):

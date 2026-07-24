@@ -51,6 +51,7 @@ class DataSourceResponse(BaseModel):
     job_status: Optional[str]
     job_progress: Optional[str]
     job_error: Optional[str]
+    job_started_at: Optional[str]
     review_count: int
     sentence_count: int
     signal_count: int
@@ -250,6 +251,7 @@ async def list_datasources(
             job_status=job.status.value if job else None,
             job_progress=job.progress if job else None,
             job_error=job.error if job else None,
+            job_started_at=job.started_at.isoformat() if job and job.started_at else None,
             review_count=review_count,
             sentence_count=sentence_count,
             signal_count=signal_count,

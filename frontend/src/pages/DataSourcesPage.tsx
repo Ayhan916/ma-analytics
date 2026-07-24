@@ -13,6 +13,7 @@ interface DataSource {
   job_status: string | null
   job_progress: string | null
   job_error: string | null
+  job_started_at: string | null
   review_count: number
   sentence_count: number
   signal_count: number
@@ -22,83 +23,114 @@ interface DataSource {
 }
 
 const PIPELINE_STEPS = [
-  { id: 'scraping',      label: 'Reviews holen',        keys: ['queued', 'scraping'] },
-  { id: 'ml',            label: 'Sentiment & Embeddings', keys: ['sentiment', 'embeddings', 'embedding'] },
-  { id: 'clustering',    label: 'Clustering',            keys: ['clustering'] },
-  { id: 'absa',          label: 'ABSA Aspekte',          keys: ['intelligence_clearing_old_data', 'intelligence_absa_extracting', 'intelligence_signals_'] },
-  { id: 'narratives',    label: 'Narratives',            keys: ['intelligence_synthesizing_narratives', 'intelligence_synthesizing_features'] },
-  { id: 'done',          label: 'Fertig',                keys: ['done'] },
+  { id: 'scraping',    label: 'Reviews',    keys: ['queued', 'scraping'] },
+  { id: 'ml',         label: 'Sentiment',  keys: ['sentiment', 'embeddings', 'embedding'] },
+  { id: 'clustering', label: 'Clustering', keys: ['clustering'] },
+  { id: 'absa',       label: 'ABSA',       keys: ['intelligence_absa_', 'intelligence_signals_'] },
+  { id: 'narratives', label: 'Narratives', keys: ['intelligence_synthesizing', 'intelligence_cleanup'] },
+  { id: 'done',       label: 'Fertig',     keys: ['done'] },
 ]
 
 function getStepIndex(progress: string | null): number {
   if (!progress) return 0
   for (let i = 0; i < PIPELINE_STEPS.length; i++) {
-    const step = PIPELINE_STEPS[i]
-    if (step.keys.some(k => progress.startsWith(k))) return i
+    if (PIPELINE_STEPS[i].keys.some(k => progress.startsWith(k))) return i
   }
   return 0
 }
 
 function extractPct(progress: string | null): number | null {
   if (!progress) return null
-  const m = progress.match(/intelligence_signals_(\d+)pct/)
+  const m = progress.match(/intelligence_(?:absa|signals)_(\d+)pct/)
   return m ? parseInt(m[1]) : null
 }
 
-function PipelineStatusBar({ progress, status, reviews, sentences, signals }: {
-  progress: string | null; status: string | null
-  reviews: number; sentences: number; signals: number
+function useElapsed(startedAt: string | null): string {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!startedAt) return
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [startedAt])
+  if (!startedAt) return ''
+  const sec = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000)
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return m > 0 ? `${m}m ${s}s` : `${s}s`
+}
+
+function PipelineStatusBar({ progress, status, startedAt, reviews }: {
+  progress: string | null
+  status: string | null
+  startedAt: string | null
+  reviews: number
 }) {
+  const elapsed = useElapsed(status === 'running' ? startedAt : null)
   if (!status || status === 'done' || status === 'failed') return null
+
   const currentIdx = getStepIndex(progress)
-  void extractPct(progress)
+  const pct = extractPct(progress)
+
+  const STEP_LABELS: Record<string, string> = {
+    queued: 'Warten…',
+    scraping: 'Reviews laden…',
+    sentiment: 'Sentiment…',
+    embeddings: 'Embeddings…',
+    clustering: 'Clustering…',
+    intelligence_absa_: 'ABSA läuft…',
+    intelligence_signals_: 'Signale schreiben…',
+    intelligence_synthesizing_narratives: 'Narratives…',
+    intelligence_cleanup_old_data: 'Aufräumen…',
+  }
+  const currentLabel = progress
+    ? Object.entries(STEP_LABELS).find(([k]) => progress.startsWith(k))?.[1] ?? progress
+    : 'Vorbereitung…'
 
   return (
-    <div className="mt-3 ml-11">
-      <div className="flex items-center gap-1 mb-2">
+    <div className="mt-3 space-y-2">
+      {/* Step pills */}
+      <div className="flex items-center gap-1">
         {PIPELINE_STEPS.map((step, i) => {
-          const done = i < currentIdx
+          const done   = i < currentIdx
           const active = i === currentIdx
           return (
             <div key={step.id} className="flex items-center gap-1 flex-1 min-w-0">
-              <div className="flex flex-col items-center gap-0.5 min-w-0 flex-1">
-                <div className={`w-full h-1.5 rounded-full transition-all duration-500 ${
-                  done   ? 'bg-emerald-500' :
-                  active ? 'bg-blue-400 animate-pulse' :
-                           'bg-slate-700'
-                }`} />
-                <span className={`text-[9px] truncate w-full text-center leading-tight ${
-                  done ? 'text-emerald-500' : active ? 'text-blue-400' : 'text-slate-600'
-                }`}>
-                  {active && step.id === 'signals' && signals > 0 && sentences > 0
-                    ? `${signals.toLocaleString()} / ${sentences.toLocaleString()}`
-                    : step.label}
-                </span>
-              </div>
-              {i < PIPELINE_STEPS.length - 1 && (
-                <div className={`w-2 h-px shrink-0 ${done ? 'bg-emerald-500/50' : 'bg-slate-700'}`} />
-              )}
+              <div className={`h-1 rounded-full w-full transition-all duration-500 ${
+                done   ? 'bg-emerald-500' :
+                active ? 'bg-blue-400' :
+                         'bg-slate-700'
+              }`} />
             </div>
           )
         })}
       </div>
-      <div className="flex items-center gap-4 mt-1">
-        <span className="text-[10px] text-slate-500">
-          <span className="text-slate-300 font-medium">{reviews.toLocaleString()}</span> Reviews
+
+      {/* Percentage bar (shown when pct is available) */}
+      {pct !== null && (
+        <div className="space-y-1">
+          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-700"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-blue-400 font-medium">{pct}%</span>
+            <span className="text-[10px] text-slate-500">{currentLabel}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Status row */}
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-slate-400 flex items-center gap-1.5">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+          {pct === null ? currentLabel : PIPELINE_STEPS[currentIdx]?.label}
         </span>
-        {sentences > 0 && (
-          <span className="text-[10px] text-slate-500">
-            <span className="text-slate-300 font-medium">{sentences.toLocaleString()}</span> Sätze
-          </span>
-        )}
-        {signals > 0 && (
-          <span className="text-[10px] text-slate-500">
-            <span className="text-blue-400 font-medium">{signals.toLocaleString()}</span> Signale
-            {sentences > 0 && (
-              <span className="text-slate-600"> ({Math.round(signals / sentences * 100)}%)</span>
-            )}
-          </span>
-        )}
+        <div className="flex items-center gap-3 text-[10px] text-slate-500">
+          <span><span className="text-slate-300 font-medium">{reviews.toLocaleString()}</span> Reviews</span>
+          {elapsed && <span className="text-slate-600">{elapsed}</span>}
+        </div>
       </div>
     </div>
   )
@@ -282,7 +314,7 @@ export function DataSourcesPage() {
                         {isDone && <ChevronRight size={14} className="text-slate-600" />}
                       </div>
                     </div>
-                    <PipelineStatusBar progress={ds.job_progress} status={ds.job_status} reviews={ds.review_count} sentences={ds.sentence_count} signals={ds.signal_count} />
+                    <PipelineStatusBar progress={ds.job_progress} status={ds.job_status} startedAt={ds.job_started_at} reviews={ds.review_count} />
                     {ds.job_status === 'failed' && ds.job_error && (
                       <div className="mt-2 ml-11 text-red-400 text-xs bg-red-500/5 border border-red-500/10 rounded-lg px-3 py-1.5">
                         {ds.job_error}
