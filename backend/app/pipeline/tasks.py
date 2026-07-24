@@ -260,43 +260,33 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     # Capture timestamp before any writes — used to identify old rows at cleanup
     run_start = datetime.now(timezone.utc)
 
-    reviews = db.query(Review).filter(Review.datasource_id == datasource_id).all()
+    # Load only substantive reviews — rating_only were filtered out in _run_ml_pipeline
+    reviews = db.query(Review).filter(
+        Review.datasource_id == datasource_id,
+        Review.review_type == "substantive",
+    ).all()
+    if not reviews:
+        # Fallback: if review_type not set (old data), load all reviews
+        reviews = db.query(Review).filter(Review.datasource_id == datasource_id).all()
+
     if not reviews:
         log.warning("intelligence_no_reviews", datasource_id=datasource_id)
         return
 
-    # --- Step 0: Data Cleaning ---
-    _update_job(db, job_id, JobStatus.running, "data_cleaning")
-    substantive_reviews = []
-    for review in reviews:
-        rtype = _classify_review_type(review.content or "", review.sentiment or "neutral")
-        review.review_type = rtype
-        if rtype == "substantive":
-            substantive_reviews.append(review)
-    db.commit()
-    log.info("cleaning_done",
-             total=len(reviews),
-             substantive=len(substantive_reviews),
-             rating_only=len(reviews) - len(substantive_reviews))
-
-    if not substantive_reviews:
-        log.warning("no_substantive_reviews", datasource_id=datasource_id)
-        return
-
     # Snapshot review metadata before any DB ops
-    review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in substantive_reviews}
+    review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in reviews}
 
     # --- Step 1: ABSA aspect extraction ---
     _update_job(db, job_id, JobStatus.running, "intelligence_absa_extracting")
-    log.info("absa_start", n_reviews=len(substantive_reviews))
+    log.info("absa_start", n_reviews=len(reviews))
 
     def _absa_progress(pct: int):
         _update_job(db, job_id, JobStatus.running, f"intelligence_absa_{pct}pct")
 
-    all_review_aspects = extract_aspects_from_reviews(substantive_reviews, batch_size=32, on_progress=_absa_progress)
+    all_review_aspects = extract_aspects_from_reviews(reviews, batch_size=32, on_progress=_absa_progress)
 
     total_aspects = 0
-    for review, aspects in zip(substantive_reviews, all_review_aspects):
+    for review, aspects in zip(reviews, all_review_aspects):
         meta = review_meta[review.id]
         for asp in aspects:
             feature = asp.get("feature_override") or normalize_feature_with_fallback(
@@ -338,9 +328,9 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
         # Commit every 200 reviews for incremental persistence
         if total_aspects > 0 and total_aspects % 200 == 0:
             db.commit()
-            pct = int(100 * substantive_reviews.index(review) / len(substantive_reviews))
+            pct = int(100 * reviews.index(review) / len(reviews))
             _update_job(db, job_id, JobStatus.running, f"intelligence_signals_{pct}pct")
-            log.info("absa_progress", aspects=total_aspects, review_idx=substantive_reviews.index(review))
+            log.info("absa_progress", aspects=total_aspects, review_idx=reviews.index(review))
 
     db.commit()
     log.info("absa_done", total_aspects=total_aspects)
@@ -513,48 +503,63 @@ def _run_ml_pipeline(db, job_id: str, datasource_id: str):
     db.commit()
     log.info("sentiment_done", pos=sentiments.count("positive"), neg=sentiments.count("negative"), neu=sentiments.count("neutral"))
 
-    # --- Step 3: Embeddings ---
-    _update_job(db, job_id, JobStatus.running, "creating_embeddings")
+    # --- Step 3: Data Cleaning ---
+    _update_job(db, job_id, JobStatus.running, "data_cleaning")
+    substantive_reviews = []
+    substantive_sentiments = []
+    for review, sentiment in zip(reviews, sentiments):
+        rtype = _classify_review_type(review.content or "", sentiment or "neutral")
+        review.review_type = rtype
+        if rtype == "substantive":
+            substantive_reviews.append(review)
+            substantive_sentiments.append(sentiment or "neutral")
+    db.commit()
+    log.info("cleaning_done",
+             total=len(reviews),
+             substantive=len(substantive_reviews),
+             rating_only=len(reviews) - len(substantive_reviews))
 
-    # Only recompute embeddings for reviews that don't have one yet
-    needs_embedding = [i for i, r in enumerate(reviews) if r.embedding is None]
+    # --- Step 4: Embeddings (substantive only) ---
+    _update_job(db, job_id, JobStatus.running, "creating_embeddings")
+    cleaned_sub = [clean_text(r.content) for r in substantive_reviews]
+
+    needs_embedding = [i for i, r in enumerate(substantive_reviews) if r.embedding is None]
     if needs_embedding:
-        texts_to_embed = [cleaned[i] for i in needs_embedding]
+        texts_to_embed = [cleaned_sub[i] for i in needs_embedding]
         new_embeddings = create_embeddings(texts_to_embed)
         for list_pos, review_idx in enumerate(needs_embedding):
-            reviews[review_idx].embedding = new_embeddings[list_pos].tolist()
+            substantive_reviews[review_idx].embedding = new_embeddings[list_pos].tolist()
         db.commit()
         log.info("embeddings_created", count=len(needs_embedding))
     else:
-        log.info("embeddings_cached", count=len(reviews))
+        log.info("embeddings_cached", count=len(substantive_reviews))
 
-    # Build full embedding array for clustering
+    # Build embedding array for clustering (substantive only)
     import numpy as np
-    all_embeddings = np.array([r.embedding for r in reviews], dtype=np.float32)
+    all_embeddings = np.array([r.embedding for r in substantive_reviews], dtype=np.float32)
 
-    # --- Step 4: Clustering ---
+    # --- Step 5: Clustering (substantive only) ---
     _update_job(db, job_id, JobStatus.running, "clustering")
 
-    # Remove existing clusters (fresh analysis)
     existing = db.query(Cluster).filter(Cluster.datasource_id == datasource_id).all()
     for c in existing:
         db.delete(c)
     db.commit()
 
-    neg_indices = [i for i, s in enumerate(sentiments) if s == "negative"]
+    neg_indices = [i for i, s in enumerate(substantive_sentiments) if s == "negative"]
     if len(neg_indices) >= MIN_CLUSTER_SIZE:
         neg_emb = all_embeddings[neg_indices]
         labels = cluster_texts(neg_emb, min_cluster_size=MIN_CLUSTER_SIZE)
         n = len({int(l) for l in labels if int(l) >= 0})
-        _build_clusters(db, datasource_id, reviews, neg_indices, labels, ClusterType.issue, dominant_language)
+        _build_clusters(db, datasource_id, substantive_reviews, neg_indices, labels, ClusterType.issue, dominant_language)
         log.info("issue_clusters_built", n_clusters=n, reviews=len(neg_indices))
 
-    pos_indices = [i for i, s in enumerate(sentiments) if s == "positive"]
+    pos_indices = [i for i, s in enumerate(substantive_sentiments) if s == "positive"]
     if len(pos_indices) >= MIN_CLUSTER_SIZE:
         pos_emb = all_embeddings[pos_indices]
         labels = cluster_texts(pos_emb, min_cluster_size=MIN_CLUSTER_SIZE)
         n = len({int(l) for l in labels if int(l) >= 0})
-        _build_clusters(db, datasource_id, reviews, pos_indices, labels, ClusterType.strength, dominant_language)
+        _build_clusters(db, datasource_id, substantive_reviews, pos_indices, labels, ClusterType.strength, dominant_language)
         log.info("strength_clusters_built", n_clusters=n, reviews=len(pos_indices))
 
     # --- Step 5: Zero-Loss Intelligence Pipeline ---
