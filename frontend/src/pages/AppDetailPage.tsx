@@ -1004,12 +1004,6 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
       {/* Reclassify General */}
       <ReclassifyGeneralSection datasourceId={datasourceId} />
 
-      {/* Divider */}
-      <div className="border-t border-white/[0.06]" />
-
-      {/* Cluster General */}
-      <ClusterGeneralSection datasourceId={datasourceId} />
-
     </div>
   )
 }
