@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 import time
-import logging
+import structlog
 from datetime import datetime, timezone
 from app.pipeline.celery_app import celery_app
 from app.pipeline.db import SessionLocal
@@ -9,13 +9,23 @@ from app.pipeline.ml import (
     clean_text, detect_language, predict_sentiments, create_embeddings,
     cluster_texts, get_cluster_label, generate_cluster_summary,
 )
+from app.pipeline.intelligence import (
+    extract_aspects_from_reviews,
+    normalize_feature,
+    classify_signal_type,
+    derive_severity,
+    extract_version_hint,
+    synthesize_feature_narrative,
+    _RESOLVED_RE as _RESOLVED_MARKER,
+)
 from app.models.pipeline_job import PipelineJob, JobStatus
 from app.models.review import Review
 from app.models.cluster import Cluster, ClusterReview, ClusterType
 from app.models.datasource import DataSource
+from app.models.intelligence import ReviewAspect, ReviewSentence, ReviewSignal, FeatureNarrative
 from app.core.config import settings
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 # Minimum reviews per cluster to be meaningful
 MIN_CLUSTER_SIZE = 10
@@ -109,6 +119,244 @@ def _build_clusters(
     db.commit()
 
 
+def _infer_versions(db, datasource_id: str) -> int:
+    """Assign versions to reviews that have a date but no reviewCreatedVersion.
+
+    Builds a timeline from versioned reviews (version_source='provided'), then
+    date-interpolates unversioned reviews into that timeline.
+    Returns the number of reviews updated.
+    """
+    from sqlalchemy import text
+
+    # Build version → earliest_date timeline from 'provided' reviews
+    rows = db.execute(
+        text("""
+            SELECT version, MIN(reviewed_at) AS first_seen
+            FROM reviews
+            WHERE datasource_id = :ds_id
+              AND version IS NOT NULL
+              AND reviewed_at IS NOT NULL
+            GROUP BY version
+            ORDER BY first_seen
+        """),
+        {"ds_id": datasource_id},
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    # timeline: [(version, start_date, end_date), ...]
+    # Each version is active from its first_seen until the next version's first_seen
+    timeline = []
+    for i, row in enumerate(rows):
+        start = row.first_seen
+        end = rows[i + 1].first_seen if i + 1 < len(rows) else None
+        timeline.append((row.version, start, end))
+
+    # Find reviews with date but no version (version_source still NULL)
+    unversioned = db.execute(
+        text("""
+            SELECT id, reviewed_at FROM reviews
+            WHERE datasource_id = :ds_id
+              AND version IS NULL
+              AND reviewed_at IS NOT NULL
+              AND (version_source IS NULL OR version_source != 'unknown')
+        """),
+        {"ds_id": datasource_id},
+    ).fetchall()
+
+    updated = 0
+    for review in unversioned:
+        dt = review.reviewed_at
+        assigned = None
+        for version, start, end in timeline:
+            if end is None:
+                if dt >= start:
+                    assigned = version
+                    break
+            else:
+                if start <= dt < end:
+                    assigned = version
+                    break
+        # If before all known versions, assign to earliest
+        if assigned is None and dt < timeline[0][1]:
+            assigned = timeline[0][0]
+
+        if assigned:
+            db.execute(
+                text("UPDATE reviews SET version = :v, version_source = 'inferred' WHERE id = :id"),
+                {"v": assigned, "id": review.id},
+            )
+            updated += 1
+        else:
+            db.execute(
+                text("UPDATE reviews SET version_source = 'unknown' WHERE id = :id"),
+                {"id": review.id},
+            )
+
+    db.commit()
+    return updated
+
+
+def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
+    """ABSA-First Intelligence Pipeline.
+
+    Full review text → pyABSA → feature normalization → rule-based signals → Groq narratives.
+    """
+    log.info("absa_pipeline_start", datasource_id=datasource_id)
+
+    reviews = db.query(Review).filter(Review.datasource_id == datasource_id).all()
+    if not reviews:
+        log.warning("intelligence_no_reviews", datasource_id=datasource_id)
+        return
+
+    # --- Step 1: Clear old intelligence data ---
+    _update_job(db, job_id, JobStatus.running, "intelligence_clearing_old_data")
+    db.query(FeatureNarrative).filter(FeatureNarrative.datasource_id == datasource_id).delete()
+    db.query(ReviewSignal).filter(ReviewSignal.datasource_id == datasource_id).delete()
+    db.query(ReviewAspect).filter(ReviewAspect.datasource_id == datasource_id).delete()
+    db.query(ReviewSentence).filter(ReviewSentence.datasource_id == datasource_id).delete()
+    db.commit()
+
+    # Snapshot review metadata before any DB ops
+    review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in reviews}
+
+    # --- Step 2: ABSA aspect extraction ---
+    _update_job(db, job_id, JobStatus.running, "intelligence_absa_extracting")
+    log.info("absa_start", n_reviews=len(reviews))
+
+    all_review_aspects = extract_aspects_from_reviews(reviews, batch_size=32)
+
+    total_aspects = 0
+    for review, aspects in zip(reviews, all_review_aspects):
+        meta = review_meta[review.id]
+        for asp in aspects:
+            feature = asp.get("feature_override") or normalize_feature(asp["aspect_term"] or "")
+            sentiment = asp["sentiment"]
+            signal_type = classify_signal_type(sentiment, meta["content"])
+            severity = derive_severity(sentiment, signal_type, meta["score"], asp["confidence"])
+            version_hint = extract_version_hint(meta["content"]) or meta["version"]
+
+            aspect_rec = ReviewAspect(
+                id=str(uuid.uuid4()),
+                review_id=review.id,
+                datasource_id=datasource_id,
+                aspect_term=asp["aspect_term"],
+                feature=feature,
+                sentiment=sentiment.lower(),
+                confidence=asp["confidence"],
+                span_text=asp["span_text"],
+                absa_source=asp["absa_source"],
+            )
+            db.add(aspect_rec)
+            db.flush()  # get aspect_rec.id
+
+            db.add(ReviewSignal(
+                id=str(uuid.uuid4()),
+                aspect_id=aspect_rec.id,
+                sentence_id=None,
+                review_id=review.id,
+                datasource_id=datasource_id,
+                feature=feature,
+                signal_type=signal_type,
+                severity=severity,
+                is_resolved=bool(_RESOLVED_MARKER.search(meta["content"])) and sentiment.lower() == "positive",
+                version_hint=version_hint,
+            ))
+            total_aspects += 1
+
+        # Commit every 200 reviews for incremental persistence
+        if total_aspects > 0 and total_aspects % 200 == 0:
+            db.commit()
+            pct = int(100 * reviews.index(review) / len(reviews))
+            _update_job(db, job_id, JobStatus.running, f"intelligence_signals_{pct}pct")
+            log.info("absa_progress", aspects=total_aspects, review_idx=reviews.index(review))
+
+    db.commit()
+    log.info("absa_done", total_aspects=total_aspects)
+
+    # --- Step 3: Narrative synthesis (Groq, ~20 calls) ---
+    if not settings.GROQ_API_KEY:
+        log.warning("intelligence_no_groq_key_skipping_narratives")
+        return
+
+    _update_job(db, job_id, JobStatus.running, "intelligence_synthesizing_narratives")
+
+    from sqlalchemy import text as sql_text
+    feature_rows = db.execute(
+        sql_text("""
+            SELECT feature, COUNT(*) AS mention_count, AVG(severity) AS avg_severity
+            FROM review_signals
+            WHERE datasource_id = :ds_id
+            GROUP BY feature
+            HAVING COUNT(*) >= 5
+            ORDER BY COUNT(*) DESC
+        """),
+        {"ds_id": datasource_id},
+    ).fetchall()
+
+    for feat_row in feature_rows:
+        feature = feat_row.feature
+
+        signal_data = db.execute(
+            sql_text("""
+                SELECT rs.signal_type, rs.severity, rs.is_resolved, rs.version_hint,
+                       asp.span_text AS text, rev.version, rev.reviewed_at
+                FROM review_signals rs
+                LEFT JOIN review_aspects asp ON rs.aspect_id = asp.id
+                JOIN reviews rev ON rs.review_id = rev.id
+                WHERE rs.datasource_id = :ds_id AND rs.feature = :feature
+                ORDER BY rev.reviewed_at DESC NULLS LAST
+                LIMIT 100
+            """),
+            {"ds_id": datasource_id, "feature": feature},
+        ).fetchall()
+
+        rows_for_llm = [
+            {
+                "text": r.text or feature,
+                "signal_type": r.signal_type,
+                "severity": r.severity,
+                "is_resolved": r.is_resolved,
+                "version": r.version_hint or r.version,
+                "reviewed_at": str(r.reviewed_at)[:10] if r.reviewed_at else None,
+            }
+            for r in signal_data
+        ]
+
+        narrative = synthesize_feature_narrative(
+            feature=feature,
+            signal_rows=rows_for_llm,
+            groq_api_key=settings.GROQ_API_KEY,
+            model=settings.GROQ_MODEL,
+        )
+        if not narrative:
+            narrative = f"{feat_row.mention_count} Nutzermeldungen zu {feature}."
+
+        existing = db.query(FeatureNarrative).filter(
+            FeatureNarrative.datasource_id == datasource_id,
+            FeatureNarrative.feature == feature,
+        ).first()
+        if existing:
+            existing.narrative = narrative
+            existing.mention_count = feat_row.mention_count
+            existing.avg_severity = float(feat_row.avg_severity) if feat_row.avg_severity else None
+            existing.generated_at = datetime.now(timezone.utc)
+        else:
+            db.add(FeatureNarrative(
+                id=str(uuid.uuid4()),
+                datasource_id=datasource_id,
+                feature=feature,
+                narrative=narrative,
+                mention_count=feat_row.mention_count,
+                avg_severity=float(feat_row.avg_severity) if feat_row.avg_severity else None,
+                signal_counts=None,
+            ))
+
+    db.commit()
+    log.info("intelligence_synthesis_done", features=len(feature_rows), datasource_id=datasource_id)
+
+
 def _run_ml_pipeline(db, job_id: str, datasource_id: str):
     reviews = db.query(Review).filter(Review.datasource_id == datasource_id).all()
     if not reviews:
@@ -194,6 +442,9 @@ def _run_ml_pipeline(db, job_id: str, datasource_id: str):
         _build_clusters(db, datasource_id, reviews, pos_indices, labels, ClusterType.strength, dominant_language)
         log.info("strength_clusters_built", n_clusters=n, reviews=len(pos_indices))
 
+    # --- Step 5: Zero-Loss Intelligence Pipeline ---
+    _run_intelligence_pipeline(db, job_id, datasource_id)
+
     # --- Finalize ---
     job = db.query(PipelineJob).filter(PipelineJob.id == job_id).first()
     if job:
@@ -267,8 +518,20 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
             for r in result:
                 ext_id = r.get("reviewId")
                 review_date = r.get("at")
+                reply_text = (r.get("replyContent") or "").strip() or None
+                reply_date = r.get("repliedAt")
 
                 if ext_id and ext_id in existing_ids:
+                    # Update developer reply for already-scraped reviews
+                    if reply_text:
+                        db.execute(
+                            __import__("sqlalchemy").text(
+                                "UPDATE reviews SET reply_content = :rc, reply_at = :ra "
+                                "WHERE datasource_id = :ds AND external_id = :eid "
+                                "AND (reply_content IS DISTINCT FROM :rc)"
+                            ),
+                            {"rc": reply_text, "ra": reply_date, "ds": datasource_id, "eid": ext_id},
+                        )
                     continue
 
                 # Cutoff: stop when we reach reviews older than last sync
@@ -280,14 +543,18 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
                 if not content:
                     continue
 
+                raw_version = r.get("reviewCreatedVersion")
                 new_reviews.append(Review(
                     id=str(uuid.uuid4()),
                     datasource_id=datasource_id,
                     external_id=ext_id,
                     content=content,
                     score=r.get("score"),
-                    version=r.get("reviewCreatedVersion"),
+                    version=raw_version or None,
+                    version_source="provided" if raw_version else None,
                     reviewed_at=review_date,
+                    reply_content=reply_text,
+                    reply_at=reply_date,
                 ))
                 if ext_id:
                     existing_ids.add(ext_id)
@@ -310,6 +577,11 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
         db.commit()
         log.info("scraping_done", new=len(new_reviews), total_existing=len(existing_ids))
 
+        # Infer versions for reviews that have a date but no reviewCreatedVersion
+        _update_job(db, job_id, JobStatus.running, "inferring_versions")
+        inferred = _infer_versions(db, datasource_id)
+        log.info("version_inference_done", inferred=inferred)
+
         _run_ml_pipeline(db, job_id, datasource_id)
 
     except Exception as exc:
@@ -317,6 +589,86 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
         log.exception("scrape_task_failed", job_id=job_id, error=str(exc))
         _update_job(db, job_id, JobStatus.failed, error=str(exc))
         raise
+
+
+@celery_app.task(
+    bind=True,
+    name="app.pipeline.tasks.backfill_replies",
+    max_retries=2,
+    default_retry_delay=60,
+)
+def backfill_replies(self, job_id: str, datasource_id: str, app_id: str, lang: str, country: str):
+    """Re-scrape Google Play to fill reply_content/reply_at for existing reviews."""
+    db = SessionLocal()
+    try:
+        _update_job(db, job_id, JobStatus.running, "backfill_replies_start")
+
+        existing: dict[str, str] = {
+            row.external_id: row.id
+            for row in db.query(Review.external_id, Review.id)
+            .filter(Review.datasource_id == datasource_id, Review.external_id.isnot(None))
+            .all()
+        }
+        target_ids = set(existing.keys())
+        processed = 0
+        updated = 0
+        continuation_token = None
+
+        from google_play_scraper import reviews as gplay_reviews, Sort
+        import sqlalchemy
+
+        log.info("backfill_replies_start", datasource_id=datasource_id, total=len(target_ids))
+
+        while target_ids:
+            result, continuation_token = gplay_reviews(
+                app_id,
+                lang=lang,
+                country=country,
+                sort=Sort.NEWEST,
+                count=200,
+                **({'continuation_token': continuation_token} if continuation_token else {}),
+            )
+            if not result:
+                break
+
+            for r in result:
+                ext_id = r.get("reviewId")
+                if not ext_id:
+                    continue
+                processed += 1
+                reply_text = (r.get("replyContent") or "").strip() or None
+                reply_date = r.get("repliedAt")
+                if ext_id in target_ids:
+                    target_ids.discard(ext_id)
+                    if reply_text:
+                        db.execute(
+                            sqlalchemy.text(
+                                "UPDATE reviews SET reply_content = :rc, reply_at = :ra "
+                                "WHERE datasource_id = :ds AND external_id = :eid "
+                                "AND (reply_content IS DISTINCT FROM :rc)"
+                            ),
+                            {"rc": reply_text, "ra": reply_date, "ds": datasource_id, "eid": ext_id},
+                        )
+                        updated += 1
+
+            db.commit()
+            log.info("backfill_progress", processed=processed, updated=updated, remaining=len(target_ids))
+            _update_job(db, job_id, JobStatus.running, f"processed_{processed}_updated_{updated}")
+
+            if not continuation_token:
+                break
+            time.sleep(1.0)
+
+        _update_job(db, job_id, JobStatus.done, f"backfill_done_updated_{updated}")
+        log.info("backfill_replies_done", processed=processed, updated=updated)
+
+    except Exception as exc:
+        db.rollback()
+        log.exception("backfill_replies_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(

@@ -1,10 +1,10 @@
 from __future__ import annotations
 import re
-import logging
+import structlog
 import numpy as np
 from typing import Optional
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 # Lazy-loaded singletons — only loaded when first used in the worker
 _sentiment_pipeline = None
@@ -116,11 +116,12 @@ def clean_text(text: str) -> str:
 def get_sentiment_pipeline():
     global _sentiment_pipeline
     if _sentiment_pipeline is None:
-        from transformers import pipeline
+        from transformers import pipeline, AutoTokenizer
         log.info("loading_sentiment_model", model=MULTILINGUAL_SENTIMENT_MODEL)
         _sentiment_pipeline = pipeline(
             "sentiment-analysis",
             model=MULTILINGUAL_SENTIMENT_MODEL,
+            tokenizer=AutoTokenizer.from_pretrained(MULTILINGUAL_SENTIMENT_MODEL, use_fast=False),
             truncation=True,
             max_length=512,
             top_k=1,
@@ -386,57 +387,43 @@ def get_cluster_label(
     groq_api_key: str = "",
     model: str = "llama3-70b-8192",
 ) -> str:
-    """Extract a meaningful label from cluster texts using TF-IDF.
+    """Generate a human-readable cluster label.
 
-    If the TF-IDF result is too generic (only stopwords or common app terms),
-    falls back to a short LLM-generated label when groq_api_key is provided.
+    Priority: LLM (when key available) → TF-IDF → generic fallback.
+    TF-IDF keywords are never shown directly to the user as labels.
     """
     fallback = f"{cluster_type.title()} Cluster"
 
     if not texts:
         return fallback
 
-    tfidf_label: Optional[str] = None
+    # 1. Try LLM first — produces the best labels
+    if groq_api_key:
+        llm_label = _generate_label_with_llm(texts, cluster_type, language, groq_api_key, model)
+        if llm_label and llm_label.strip():
+            return llm_label
+
+    # 2. TF-IDF fallback — only when LLM unavailable
     try:
         from sklearn.feature_extraction.text import TfidfVectorizer
 
-        stop_words = list(COMBINED_STOP_WORDS)
         vectorizer = TfidfVectorizer(
             max_features=50,
-            stop_words=stop_words,
+            stop_words=list(COMBINED_STOP_WORDS),
             min_df=1,
             ngram_range=(1, 2),
         )
         tfidf_matrix = vectorizer.fit_transform(texts)
         feature_names = vectorizer.get_feature_names_out()
-
         scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
         top_indices = scores.argsort()[::-1][:3]
         terms = [feature_names[i] for i in top_indices if scores[i] > 0]
-
-        if terms:
-            tfidf_label = " / ".join(terms)
-
+        if terms and is_label_meaningful(" / ".join(terms)):
+            return " / ".join(terms)
     except Exception:
         log.warning("cluster_label_tfidf_failed", texts_count=len(texts))
 
-    # Quality check: if TF-IDF produced something useful, use it
-    if tfidf_label and is_label_meaningful(tfidf_label):
-        return tfidf_label
-
-    # Label is generic or missing — try LLM
-    if groq_api_key:
-        log.info(
-            "cluster_label_llm_fallback",
-            tfidf_label=tfidf_label,
-            cluster_type=cluster_type,
-        )
-        llm_label = _generate_label_with_llm(texts, cluster_type, language, groq_api_key, model)
-        if llm_label and llm_label.strip():
-            return llm_label
-
-    # Final fallback: use TF-IDF result even if generic, or the default string
-    return tfidf_label or fallback
+    return fallback
 
 
 def generate_cluster_summary(

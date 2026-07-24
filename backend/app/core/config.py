@@ -24,14 +24,15 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:3002", "http://localhost:5173"]
 
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama3-70b-8192"
+    GROQ_API_KEY_2: str = ""
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
     RESEND_API_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:3002"
     EMAIL_FROM: str = "noreply@ma-analytics.app"
 
     # Scraping rate limits per user
     SCRAPE_MAX_PER_HOUR: int = 5
-    SCRAPE_MAX_REVIEWS: int = 50000
+    SCRAPE_MAX_REVIEWS: int = 250000
 
     class Config:
         env_file = ".env"

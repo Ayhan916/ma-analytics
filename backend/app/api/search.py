@@ -139,12 +139,12 @@ async def _vector_search(
             r.sentiment,
             r.language,
             r.reviewed_at,
-            1 - (r.embedding <=> :query_vec::vector) AS similarity
+            1 - (r.embedding <=> CAST(:query_vec AS vector)) AS similarity
         FROM reviews r
         WHERE r.datasource_id = :datasource_id
           AND r.embedding IS NOT NULL
           {filter_sql}
-        ORDER BY r.embedding <=> :query_vec::vector
+        ORDER BY r.embedding <=> CAST(:query_vec AS vector)
         LIMIT :limit
     """)
     rows = (await db.execute(sql, {
@@ -213,12 +213,12 @@ async def _hybrid_search(
         WITH vector_ranked AS (
             SELECT
                 r.id,
-                ROW_NUMBER() OVER (ORDER BY r.embedding <=> :query_vec::vector) AS rn
+                ROW_NUMBER() OVER (ORDER BY r.embedding <=> CAST(:query_vec AS vector)) AS rn
             FROM reviews r
             WHERE r.datasource_id = :datasource_id
               AND r.embedding IS NOT NULL
               {filter_sql}
-            ORDER BY r.embedding <=> :query_vec::vector
+            ORDER BY r.embedding <=> CAST(:query_vec AS vector)
             LIMIT :candidate_limit
         ),
         text_ranked AS (

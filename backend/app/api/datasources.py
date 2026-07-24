@@ -49,12 +49,17 @@ class DataSourceResponse(BaseModel):
     app_id: Optional[str]
     job_id: Optional[str]
     job_status: Optional[str]
+    job_progress: Optional[str]
     job_error: Optional[str]
     review_count: int
+    sentence_count: int
+    signal_count: int
     last_synced: Optional[str]
     scrape_lang: Optional[str]
     scrape_country: Optional[str]
     scrape_count: Optional[int]
+    review_date_from: Optional[str]
+    review_date_to: Optional[str]
 
 
 async def _check_scrape_rate_limit(db: AsyncSession, user_id: str) -> None:
@@ -187,8 +192,8 @@ async def upload_csv(
 
     return DataSourceResponse(
         id=ds.id, name=ds.name, type=ds.type.value, app_id=None,
-        job_id=job.id, job_status=job.status.value, job_error=None,
-        review_count=count, last_synced=None,
+        job_id=job.id, job_status=job.status.value, job_progress=job.progress, job_error=None,
+        review_count=count, sentence_count=0, signal_count=0, last_synced=None,
         scrape_lang=None, scrape_country=None, scrape_count=None,
     )
 
@@ -220,14 +225,38 @@ async def list_datasources(
         )
         review_count = count_result.scalar() or 0
 
+        from app.models.intelligence import ReviewAspect, ReviewSignal
+        sent_result = await db.execute(
+            select(func.count()).select_from(ReviewAspect).where(ReviewAspect.datasource_id == ds.id)
+        )
+        sentence_count = sent_result.scalar() or 0
+
+        sig_result = await db.execute(
+            select(func.count()).select_from(ReviewSignal).where(ReviewSignal.datasource_id == ds.id)
+        )
+        signal_count = sig_result.scalar() or 0
+
+        date_result = await db.execute(
+            select(
+                func.min(Review.reviewed_at).label("date_from"),
+                func.max(Review.reviewed_at).label("date_to"),
+            ).where(Review.datasource_id == ds.id, Review.reviewed_at.isnot(None))
+        )
+        date_row = date_result.one()
+
         out.append(DataSourceResponse(
             id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
             job_id=job.id if job else None,
             job_status=job.status.value if job else None,
+            job_progress=job.progress if job else None,
             job_error=job.error if job else None,
             review_count=review_count,
+            sentence_count=sentence_count,
+            signal_count=signal_count,
             last_synced=ds.last_synced.isoformat() if ds.last_synced else None,
             scrape_lang=ds.scrape_lang, scrape_country=ds.scrape_country, scrape_count=ds.scrape_count,
+            review_date_from=date_row.date_from.strftime("%b %Y") if date_row.date_from else None,
+            review_date_to=date_row.date_to.strftime("%b %Y") if date_row.date_to else None,
         ))
 
     return out
@@ -261,6 +290,67 @@ async def delete_datasource(
 
     await db.delete(ds)
     await db.commit()
+
+
+@router.post("/{datasource_id}/fetch-all", response_model=DataSourceResponse)
+async def fetch_all_reviews(
+    datasource_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-scrape with maximum count and no date cutoff to load all available reviews."""
+    result = await db.execute(
+        select(DataSource).where(DataSource.id == datasource_id, DataSource.user_id == current_user.id)
+    )
+    ds = result.scalar_one_or_none()
+    if not ds:
+        raise HTTPException(status_code=404, detail="DataSource not found")
+    if ds.type != DataSourceType.google_play or not ds.app_id:
+        raise HTTPException(status_code=400, detail="fetch-all is only available for Google Play sources")
+
+    job_result = await db.execute(
+        select(PipelineJob)
+        .where(PipelineJob.datasource_id == ds.id)
+        .order_by(desc(PipelineJob.created_at))
+        .limit(1)
+    )
+    latest_job = job_result.scalar_one_or_none()
+    if latest_job and latest_job.status in (JobStatus.pending, JobStatus.running):
+        raise HTTPException(status_code=409, detail="Pipeline is already running")
+
+    await _check_scrape_rate_limit(db, current_user.id)
+
+    # Clear last_synced so the scraper applies no date cutoff and fetches everything
+    ds.last_synced = None
+
+    new_job = PipelineJob(
+        id=str(uuid.uuid4()),
+        datasource_id=ds.id,
+        status=JobStatus.pending,
+        progress="queued",
+    )
+    db.add(new_job)
+    await db.commit()
+
+    lang    = ds.scrape_lang    or "de"
+    country = ds.scrape_country or "de"
+    count   = settings.SCRAPE_MAX_REVIEWS
+
+    from app.pipeline.tasks import scrape_and_run
+    scrape_and_run.apply_async(args=[new_job.id, ds.id, ds.app_id, count, lang, country], task_id=new_job.id)
+    log.info("fetch_all_queued", app_id=ds.app_id, count=count, lang=lang, country=country)
+
+    count_result = await db.execute(
+        select(func.count()).select_from(Review).where(Review.datasource_id == ds.id)
+    )
+    review_count = count_result.scalar() or 0
+
+    return DataSourceResponse(
+        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
+        job_id=new_job.id, job_status=new_job.status.value, job_error=None,
+        review_count=review_count, last_synced=None,
+        scrape_lang=ds.scrape_lang, scrape_country=ds.scrape_country, scrape_count=ds.scrape_count,
+    )
 
 
 @router.post("/{datasource_id}/retry", response_model=DataSourceResponse)

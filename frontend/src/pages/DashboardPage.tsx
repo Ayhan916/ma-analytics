@@ -1,203 +1,298 @@
 import { useState, useEffect } from 'react'
-import { AppShell } from '../components/AppShell'
-import { datasourceApi, dashboardApi } from '../services/api'
 import { Link } from 'react-router-dom'
-import { TrendingUp, TrendingDown, Star, MessageSquare, Lightbulb, ChevronDown, AlertCircle } from 'lucide-react'
+import { AppShell } from '../components/AppShell'
+import { dashboardApi } from '../services/api'
+import { TrendingDown, Target, RefreshCw, ChevronRight, AlertTriangle } from 'lucide-react'
 
-interface Cluster { id: string; label: string; mentions: number; summary: string; examples: string[] }
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 interface Sentiment { positive: number; negative: number; neutral: number; total: number }
-interface Summary {
-  datasource_name: string
+
+interface AppData {
+  id: string
+  name: string
   review_count: number
   avg_rating: number | null
   sentiment: Sentiment
-  top_issues: Cluster[]
-  top_strengths: Cluster[]
+  negative_pct: number
+  opportunity_score: number
+  top_issue: string | null
+  top_issue_mentions: number
 }
 
-function KpiCard({ label, value, sub, icon, color }: { label: string; value: string; sub?: string; icon: React.ReactNode; color: string }) {
+interface PainPoint {
+  label: string
+  app_name: string
+  datasource_id: string
+  mentions: number
+  opportunity_score: number
+}
+
+interface Report { apps: AppData[]; market_pain_points: PainPoint[] }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function RatingStars({ rating }: { rating: number | null }) {
+  if (!rating) return <span className="text-slate-600 text-xs">—</span>
+  const full = Math.round(rating)
   return (
-    <div className="bg-slate-900 border border-white/10 rounded-xl p-4">
-      <div className="flex items-start justify-between mb-3">
-        <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">{label}</p>
-        <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${color}`}>{icon}</div>
+    <span className="text-amber-400 text-sm tracking-tight">
+      {'★'.repeat(full)}{'☆'.repeat(5 - full)}
+      <span className="text-slate-400 text-xs ml-1">{rating.toFixed(1)}</span>
+    </span>
+  )
+}
+
+function SentimentBar({ s }: { s: Sentiment }) {
+  const total = s.total || 1
+  const pos = Math.round((s.positive / total) * 100)
+  const neu = Math.round((s.neutral  / total) * 100)
+  const neg = Math.round((s.negative / total) * 100)
+  return (
+    <div className="space-y-1">
+      <div className="flex h-1.5 rounded-full overflow-hidden gap-px">
+        <div className="bg-emerald-500 rounded-full" style={{ width: `${pos}%` }} />
+        <div className="bg-slate-600 rounded-full"   style={{ width: `${neu}%` }} />
+        <div className="bg-red-500 rounded-full"     style={{ width: `${neg}%` }} />
       </div>
-      <p className="text-white text-2xl font-bold">{value}</p>
-      {sub && <p className="text-slate-500 text-xs mt-1">{sub}</p>}
+      <div className="flex gap-3 text-[10px] text-slate-500">
+        <span><span className="text-emerald-400">●</span> {pos}%</span>
+        <span><span className="text-red-400">●</span> {neg}%</span>
+      </div>
     </div>
   )
 }
 
-function ClusterCard({ cluster, type }: { cluster: Cluster; type: 'issue' | 'strength' }) {
-  const [open, setOpen] = useState(false)
-  const isIssue = type === 'issue'
+function OpportunityBadge({ score, max }: { score: number; max: number }) {
+  const pct = max > 0 ? score / max : 0
+  const color = pct > 0.7 ? 'text-red-400 bg-red-400/10 border-red-400/20'
+              : pct > 0.4 ? 'text-amber-400 bg-amber-400/10 border-amber-400/20'
+              :              'text-slate-400 bg-slate-400/10 border-slate-400/20'
+  const label = pct > 0.7 ? 'High' : pct > 0.4 ? 'Medium' : 'Low'
   return (
-    <div className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden">
-      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between p-4 text-left hover:bg-white/5 transition-colors">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${isIssue ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-            {isIssue ? <TrendingDown size={14} /> : <TrendingUp size={14} />}
-          </div>
-          <div className="min-w-0">
-            <p className="text-white text-sm font-medium truncate">{cluster.label}</p>
-            <p className="text-slate-500 text-xs">{cluster.summary}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0 ml-3">
-          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isIssue ? 'bg-red-500/10 text-red-400' : 'bg-emerald-500/10 text-emerald-400'}`}>
-            {cluster.mentions}
-          </span>
-          <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
-        </div>
-      </button>
-      {open && cluster.examples?.length > 0 && (
-        <div className="border-t border-white/5 px-4 py-3 space-y-2">
-          {cluster.examples.slice(0, 3).map((ex, i) => (
-            <p key={i} className="text-slate-400 text-xs leading-relaxed border-l-2 border-white/10 pl-3">"{ex}"</p>
-          ))}
-        </div>
-      )}
+    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${color}`}>
+      {label}
+    </span>
+  )
+}
+
+function EmptyState() {
+  return (
+    <div className="bg-slate-900 border border-white/10 rounded-2xl p-12 text-center">
+      <Target size={36} className="text-slate-700 mx-auto mb-4" />
+      <p className="text-white text-sm font-medium mb-1">No competitor data yet</p>
+      <p className="text-slate-500 text-sm mb-4">
+        Add competitor apps in Data Sources to start your competitive analysis.
+      </p>
+      <Link to="/datasources"
+        className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+        Add first competitor
+      </Link>
     </div>
   )
 }
 
-export function DashboardPage() {
-  const [sources, setSources] = useState<{ id: string; name: string }[]>([])
-  const [selectedId, setSelectedId] = useState<string>('')
-  const [summary, setSummary] = useState<Summary | null>(null)
-  const [insight, setInsight] = useState<{ insight: string; generated_by: string } | null>(null)
-  const [loadingData, setLoadingData] = useState(false)
+// ─── Section 1: Competitive Ranking ──────────────────────────────────────────
 
-  useEffect(() => {
-    datasourceApi.list().then((list: any[]) => {
-      const done = list.filter(d => d.job_status === 'done')
-      setSources(done)
-      if (done.length > 0) setSelectedId(done[0].id)
-    }).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    if (!selectedId) return
-    setLoadingData(true)
-    Promise.all([
-      dashboardApi.summary(selectedId),
-      dashboardApi.insight(selectedId),
-    ]).then(([s, i]) => {
-      setSummary(s)
-      setInsight(i)
-    }).catch(() => {}).finally(() => setLoadingData(false))
-  }, [selectedId])
-
-  if (sources.length === 0) {
-    return (
-      <AppShell>
-        <div className="p-6 flex flex-col items-center justify-center h-full text-center">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-            <MessageSquare size={28} className="text-indigo-400" />
-          </div>
-          <h2 className="text-white text-xl font-bold mb-2">No data yet</h2>
-          <p className="text-slate-400 text-sm mb-6 max-w-xs">Connect a Google Play app or upload a CSV to get AI-powered insights from your customer reviews.</p>
-          <Link to="/datasources" className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-            Connect Data Source
-          </Link>
-        </div>
-      </AppShell>
-    )
-  }
-
-  const pctPos = summary ? Math.round((summary.sentiment.positive / summary.sentiment.total) * 100) : 0
-  const pctNeg = summary ? Math.round((summary.sentiment.negative / summary.sentiment.total) * 100) : 0
-
+function CompetitiveRanking({ apps, maxScore }: { apps: AppData[]; maxScore: number }) {
   return (
-    <AppShell>
-      <div className="p-6 max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-white text-2xl font-bold">Product Intelligence</h1>
-            <p className="text-slate-400 text-sm mt-1">AI-powered insights from customer reviews</p>
-          </div>
-          <select
-            value={selectedId}
-            onChange={e => setSelectedId(e.target.value)}
-            className="bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500">
-            {sources.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
+    <section>
+      <div className="flex items-center gap-2 mb-4">
+        <TrendingDown size={15} className="text-red-400" />
+        <h2 className="text-white text-sm font-semibold">Competitive Ranking</h2>
+        <span className="text-slate-500 text-xs">— sorted by market opportunity</span>
+      </div>
 
-        {loadingData ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : summary ? (
-          <>
-            {/* KPIs */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-              <KpiCard label="Reviews" value={summary.review_count.toLocaleString()} icon={<MessageSquare size={14} />} color="bg-indigo-500/10 text-indigo-400" />
-              <KpiCard label="Avg Rating" value={summary.avg_rating ? `${summary.avg_rating} ★` : '—'} icon={<Star size={14} />} color="bg-amber-500/10 text-amber-400" />
-              <KpiCard label="Positive" value={`${pctPos}%`} sub={`${summary.sentiment.positive} reviews`} icon={<TrendingUp size={14} />} color="bg-emerald-500/10 text-emerald-400" />
-              <KpiCard label="Negative" value={`${pctNeg}%`} sub={`${summary.sentiment.negative} reviews`} icon={<TrendingDown size={14} />} color="bg-red-500/10 text-red-400" />
+      <div className="space-y-2">
+        {apps.map((app, i) => (
+          <Link key={app.id} to={`/datasources/${app.id}`}
+            className="flex items-center gap-4 bg-slate-900 border border-white/10 hover:border-indigo-500/40 hover:bg-slate-800/60 rounded-xl px-4 py-3.5 transition-all group">
+
+            {/* Rank */}
+            <span className="text-slate-600 text-sm font-mono w-5 shrink-0">#{i + 1}</span>
+
+            {/* App name + top issue */}
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-sm font-medium group-hover:text-indigo-300 transition-colors">
+                {app.name}
+              </p>
+              {app.top_issue && (
+                <p className="text-slate-500 text-xs mt-0.5 truncate">
+                  Top issue: {app.top_issue}
+                </p>
+              )}
+            </div>
+
+            {/* Stars */}
+            <div className="shrink-0 hidden sm:block">
+              <RatingStars rating={app.avg_rating} />
             </div>
 
             {/* Sentiment bar */}
-            <div className="bg-slate-900 border border-white/10 rounded-xl p-4 mb-6">
+            <div className="w-24 shrink-0 hidden md:block">
+              <SentimentBar s={app.sentiment} />
+            </div>
+
+            {/* Reviews */}
+            <div className="text-right shrink-0 hidden sm:block">
+              <p className="text-white text-sm font-medium">{app.review_count.toLocaleString()}</p>
+              <p className="text-slate-500 text-xs">reviews</p>
+            </div>
+
+            {/* Opportunity badge */}
+            <OpportunityBadge score={app.opportunity_score} max={maxScore} />
+
+            <ChevronRight size={14} className="text-slate-600 group-hover:text-indigo-400 transition-colors shrink-0" />
+          </Link>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ─── Section 2: Market Pain Points ───────────────────────────────────────────
+
+function MarketPainPoints({ points, maxScore }: { points: PainPoint[]; maxScore: number }) {
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-4">
+        <AlertTriangle size={15} className="text-amber-400" />
+        <h2 className="text-white text-sm font-semibold">Market Pain Points</h2>
+        <span className="text-slate-500 text-xs">— top issues across all competitors</span>
+      </div>
+
+      <div className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-white/[0.06]">
+              <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Issue</th>
+              <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden sm:table-cell">Competitor</th>
+              <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Mentions</th>
+              <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden md:table-cell">Opportunity</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.04]">
+            {points.map((p, i) => (
+              <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                <td className="px-4 py-3">
+                  <Link to={`/datasources/${p.datasource_id}`}
+                    className="text-white hover:text-indigo-300 transition-colors font-medium">
+                    {p.label}
+                  </Link>
+                </td>
+                <td className="px-4 py-3 hidden sm:table-cell">
+                  <span className="text-slate-400 text-xs bg-slate-800 px-2 py-0.5 rounded-full">{p.app_name}</span>
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <span className="text-red-400 font-semibold">{p.mentions}</span>
+                </td>
+                <td className="px-4 py-3 text-right hidden md:table-cell">
+                  <OpportunityBadge score={p.opportunity_score} max={maxScore} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+// ─── Section 3: Opportunity Score ────────────────────────────────────────────
+
+function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: number }) {
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-4">
+        <Target size={15} className="text-indigo-400" />
+        <h2 className="text-white text-sm font-semibold">Opportunity Score</h2>
+        <span className="text-slate-500 text-xs">— where to attack first</span>
+      </div>
+
+      <div className="space-y-3">
+        {apps.map(app => {
+          const pct = maxScore > 0 ? (app.opportunity_score / maxScore) * 100 : 0
+          const barColor = pct > 70 ? 'bg-red-500' : pct > 40 ? 'bg-amber-500' : 'bg-slate-600'
+          return (
+            <Link key={app.id} to={`/datasources/${app.id}`}
+              className="block bg-slate-900 border border-white/10 hover:border-white/20 rounded-xl p-4 transition-all group">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-slate-400 text-xs font-medium uppercase tracking-wider">Sentiment Distribution</p>
-                <p className="text-slate-500 text-xs">{summary.sentiment.total} total</p>
+                <span className="text-white text-sm font-medium group-hover:text-indigo-300 transition-colors">
+                  {app.name}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-400 text-xs">{app.negative_pct}% negative</span>
+                  <span className="text-white text-sm font-bold">{app.opportunity_score.toLocaleString()}</span>
+                </div>
               </div>
-              <div className="flex rounded-full overflow-hidden h-2.5 gap-0.5">
-                <div className="bg-emerald-500 transition-all" style={{ width: `${pctPos}%` }} />
-                <div className="bg-slate-600 transition-all" style={{ width: `${100 - pctPos - pctNeg}%` }} />
-                <div className="bg-red-500 transition-all" style={{ width: `${pctNeg}%` }} />
+              <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
               </div>
-              <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />Positive {pctPos}%</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-600 inline-block" />Neutral {100 - pctPos - pctNeg}%</span>
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Negative {pctNeg}%</span>
-              </div>
-            </div>
+              {app.top_issue && (
+                <p className="text-slate-500 text-xs mt-2">
+                  <TrendingDown size={10} className="inline mr-1 text-red-400" />
+                  {app.top_issue} ({app.top_issue_mentions} mentions)
+                </p>
+              )}
+            </Link>
+          )
+        })}
+      </div>
 
-            {/* Issues + Strengths */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <AlertCircle size={14} className="text-red-400" />
-                  <h2 className="text-white text-sm font-semibold">Top Issues</h2>
-                  <span className="text-slate-500 text-xs">({summary.top_issues.length})</span>
-                </div>
-                <div className="space-y-2">
-                  {summary.top_issues.length > 0
-                    ? summary.top_issues.map(c => <ClusterCard key={c.id} cluster={c} type="issue" />)
-                    : <p className="text-slate-500 text-sm">No issues detected.</p>}
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <TrendingUp size={14} className="text-emerald-400" />
-                  <h2 className="text-white text-sm font-semibold">Top Strengths</h2>
-                  <span className="text-slate-500 text-xs">({summary.top_strengths.length})</span>
-                </div>
-                <div className="space-y-2">
-                  {summary.top_strengths.length > 0
-                    ? summary.top_strengths.map(c => <ClusterCard key={c.id} cluster={c} type="strength" />)
-                    : <p className="text-slate-500 text-sm">No strengths detected.</p>}
-                </div>
-              </div>
-            </div>
+      <div className="mt-4 bg-slate-900/50 border border-white/[0.06] rounded-xl p-4">
+        <p className="text-slate-500 text-xs leading-relaxed">
+          <span className="text-slate-300 font-medium">How it's calculated: </span>
+          Opportunity Score combines negative sentiment rate × volume of complaints × rating gap from maximum.
+          Higher score = more unhappy users + more mentions + lower rating = bigger market gap to exploit.
+        </p>
+      </div>
+    </section>
+  )
+}
 
-            {/* AI Insight */}
-            {insight && (
-              <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Lightbulb size={14} className="text-indigo-400" />
-                  <p className="text-indigo-300 text-xs font-semibold uppercase tracking-wider">AI Insight</p>
-                  <span className="text-slate-600 text-xs ml-auto">{insight.generated_by}</span>
-                </div>
-                <p className="text-slate-300 text-sm leading-relaxed">{insight.insight}</p>
-              </div>
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+export function DashboardPage() {
+  const [report, setReport]   = useState<Report | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    dashboardApi.competitive()
+      .then(setReport)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const maxAppScore   = report ? Math.max(...report.apps.map(a => a.opportunity_score), 1)           : 1
+  const maxPointScore = report ? Math.max(...report.market_pain_points.map(p => p.opportunity_score), 1) : 1
+
+  return (
+    <AppShell>
+      <div className="min-h-full bg-slate-950 p-6 max-w-5xl mx-auto">
+
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-white text-2xl font-bold">Competitive Intelligence</h1>
+          <p className="text-slate-400 text-sm mt-1">
+            Identify where competitors are failing — and where you can win.
+          </p>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-24">
+            <RefreshCw size={22} className="text-slate-600 animate-spin" />
+          </div>
+        ) : !report || report.apps.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <div className="space-y-10">
+            <CompetitiveRanking apps={report.apps} maxScore={maxAppScore} />
+            {report.market_pain_points.length > 0 && (
+              <MarketPainPoints points={report.market_pain_points} maxScore={maxPointScore} />
             )}
-          </>
-        ) : null}
+            <OpportunityScores apps={report.apps} maxScore={maxAppScore} />
+          </div>
+        )}
       </div>
     </AppShell>
   )

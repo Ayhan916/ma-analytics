@@ -100,6 +100,10 @@ export const datasourceApi = {
     const { data } = await apiClient.post(`/datasources/${id}/retry`)
     return data
   },
+  fetchAll: async (id: string) => {
+    const { data } = await apiClient.post(`/datasources/${id}/fetch-all`)
+    return data
+  },
 }
 
 // Jobs
@@ -118,6 +122,22 @@ export const dashboardApi = {
   },
   insight: async (datasourceId: string) => {
     const { data } = await apiClient.get(`/dashboard/insight?datasource_id=${datasourceId}`)
+    return data
+  },
+  competitive: async () => {
+    const { data } = await apiClient.get('/dashboard/competitive')
+    return data
+  },
+  sentimentTrend: async (datasourceId: string) => {
+    const { data } = await apiClient.get(`/dashboard/sentiment-trend?datasource_id=${datasourceId}`)
+    return data
+  },
+  versionAnalysis: async (datasourceId: string) => {
+    const { data } = await apiClient.get(`/dashboard/version-analysis?datasource_id=${datasourceId}`)
+    return data
+  },
+  versionCompare: async (datasourceId: string, clusterId: string, v1: string, v2: string) => {
+    const { data } = await apiClient.get(`/dashboard/version-compare?datasource_id=${datasourceId}&cluster_id=${clusterId}&v1=${encodeURIComponent(v1)}&v2=${encodeURIComponent(v2)}`)
     return data
   },
 }
@@ -158,6 +178,37 @@ export const searchApi = {
     if (params.limit !== undefined) p.limit = String(params.limit)
     if (params.sentiment) p.sentiment = params.sentiment
     const { data } = await apiClient.get(`/search?${new URLSearchParams(p)}`)
+    return data
+  },
+}
+
+// Intelligence
+export const intelligenceApi = {
+  matrix: async (datasourceId: string) => {
+    const { data } = await apiClient.get(`/intelligence/matrix?datasource_id=${datasourceId}`)
+    return data
+  },
+  feature: async (datasourceId: string, feature: string, signalTypeFilter?: string, versionFilter?: string) => {
+    const p = new URLSearchParams({ datasource_id: datasourceId, feature })
+    if (signalTypeFilter) p.set('signal_type_filter', signalTypeFilter)
+    if (versionFilter) p.set('version_filter', versionFilter)
+    const { data } = await apiClient.get(`/intelligence/feature?${p}`)
+    return data
+  },
+  reviewAspects: async (reviewId: string) => {
+    const { data } = await apiClient.get(`/intelligence/review/${reviewId}/aspects`)
+    return data
+  },
+  versionBreakdown: async (datasourceId: string, version: string) => {
+    const { data } = await apiClient.get(`/intelligence/version-breakdown?datasource_id=${datasourceId}&version=${encodeURIComponent(version)}`)
+    return data
+  },
+  backfillReplies: async (datasourceId: string) => {
+    const { data } = await apiClient.post(`/intelligence/backfill-replies?datasource_id=${datasourceId}`)
+    return data
+  },
+  resolutionCheck: async (reviewId: string) => {
+    const { data } = await apiClient.get(`/intelligence/review/${reviewId}/resolution-check`)
     return data
   },
 }

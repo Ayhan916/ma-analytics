@@ -30,7 +30,10 @@ class Review(Base):
     sentiment: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     language: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 'provided' | 'inferred' | 'unknown'
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reply_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reply_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Persisted embedding for RAG retrieval (pgvector vector(384))
