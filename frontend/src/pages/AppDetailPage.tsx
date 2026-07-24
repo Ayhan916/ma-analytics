@@ -197,8 +197,10 @@ function AbsaFeatureCard({ feat, type, onSelect }: { feat: FeatureRow; type: 'is
 // ─── Sentiment Trend Chart ───────────────────────────────────────────────────
 
 function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
-  const [trend, setTrend]   = useState<TrendData | null>(null)
+  const [trend, setTrend]     = useState<TrendData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
     dashboardApi.sentimentTrend(datasourceId)
@@ -218,91 +220,199 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
     </div>
   )
 
-  const W = 600, H = 180
-  const PAD = { top: 16, right: 20, bottom: 44, left: 44 }
+  const W = 600, H = 200
+  const PAD = { top: 16, right: 24, bottom: 44, left: 44 }
   const pw = W - PAD.left - PAD.right
   const ph = H - PAD.top - PAD.bottom
 
   const pts = trend.points
   const n   = pts.length
 
-  const toXY = (i: number, pct: number) => ({
-    x: PAD.left + (n === 1 ? pw / 2 : (i / (n - 1)) * pw),
-    y: PAD.top + (1 - pct / 100) * ph,
-  })
+  const xOf = (i: number) => PAD.left + (n === 1 ? pw / 2 : (i / (n - 1)) * pw)
+  const yOf = (pct: number) => PAD.top + (1 - pct / 100) * ph
+  const pctOf = (val: number, total: number) => total ? Math.round((val / total) * 100) : 0
 
-  const posPoints = pts.map((p, i) => toXY(i, p.total ? (p.positive / p.total) * 100 : 0))
-  const negPoints = pts.map((p, i) => toXY(i, p.total ? (p.negative / p.total) * 100 : 0))
+  const posPoints = pts.map((p, i) => ({ x: xOf(i), y: yOf(pctOf(p.positive, p.total)) }))
+  const negPoints = pts.map((p, i) => ({ x: xOf(i), y: yOf(pctOf(p.negative, p.total)) }))
+  const neuPoints = pts.map((p, i) => ({ x: xOf(i), y: yOf(pctOf(p.neutral,  p.total)) }))
 
   const toPath = (points: { x: number; y: number }[]) =>
     points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
 
   const toArea = (points: { x: number; y: number }[]) => {
-    const baseline = PAD.top + ph
-    const first = points[0], last = points[points.length - 1]
-    return `${toPath(points)} L ${last.x.toFixed(1)} ${baseline} L ${first.x.toFixed(1)} ${baseline} Z`
+    const base = PAD.top + ph
+    return `${toPath(points)} L ${points[points.length-1].x.toFixed(1)} ${base} L ${points[0].x.toFixed(1)} ${base} Z`
   }
 
   const gridPcts = [0, 25, 50, 75, 100]
   const step = n <= 6 ? 1 : n <= 12 ? 2 : Math.ceil(n / 6)
 
+  // Trend summary: compare last 3 vs first 3 months
+  const trendSuffix = (() => {
+    if (n < 4) return null
+    const half = Math.min(3, Math.floor(n / 2))
+    const recent = pts.slice(-half)
+    const early  = pts.slice(0, half)
+    const avgRecent = recent.reduce((s, p) => s + pctOf(p.positive, p.total), 0) / half
+    const avgEarly  = early.reduce((s, p)  => s + pctOf(p.positive, p.total), 0) / half
+    const delta = Math.round(avgRecent - avgEarly)
+    if (Math.abs(delta) < 2) return null
+    return delta > 0
+      ? { label: `+${delta}% positiv (letzte ${half} Monate)`, color: 'text-emerald-400' }
+      : { label: `${delta}% positiv (letzte ${half} Monate)`, color: 'text-red-400' }
+  })()
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const scaleX = W / rect.width
+    const mouseX = (e.clientX - rect.left) * scaleX
+    let closest = 0
+    let minDist = Infinity
+    posPoints.forEach((p, i) => {
+      const d = Math.abs(p.x - mouseX)
+      if (d < minDist) { minDist = d; closest = i }
+    })
+    setHoveredIdx(closest)
+  }
+
+  const hp = hoveredIdx !== null ? pts[hoveredIdx] : null
+  const hx = hoveredIdx !== null ? posPoints[hoveredIdx].x : null
+
+  // Tooltip left/right positioning
+  const tooltipOnRight = hoveredIdx !== null && hoveredIdx < n / 2
+
   return (
     <div>
-      <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Sentiment Trend</p>
-      <div className="bg-slate-900 border border-white/10 rounded-xl p-4">
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto">
-          {/* Horizontal grid */}
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">Sentiment Trend</p>
+        {trendSuffix && (
+          <span className={`text-[10px] font-medium ${trendSuffix.color}`}>{trendSuffix.label}</span>
+        )}
+      </div>
+      <div className="bg-slate-900 border border-white/10 rounded-xl p-4 relative">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full h-auto cursor-crosshair"
+          onMouseMove={handleMouseMove}
+          onMouseLeave={() => setHoveredIdx(null)}
+        >
+          {/* Grid */}
           {gridPcts.map(pct => {
-            const y = PAD.top + (1 - pct / 100) * ph
+            const y = yOf(pct)
             return (
               <g key={pct}>
-                <line x1={PAD.left} y1={y} x2={W - PAD.right} y2={y} stroke="#1e293b" strokeWidth="1" />
+                <line x1={PAD.left} y1={y} x2={W - PAD.right} y2={y}
+                  stroke="#1e293b" strokeWidth={pct === 0 ? 1.5 : 1} />
                 <text x={PAD.left - 6} y={y + 3.5} textAnchor="end" fontSize="9" fill="#475569">{pct}%</text>
               </g>
             )
           })}
 
           {/* Area fills */}
-          <path d={toArea(posPoints)} fill="#10b981" fillOpacity="0.07" />
-          <path d={toArea(negPoints)} fill="#ef4444" fillOpacity="0.07" />
+          <path d={toArea(posPoints)} fill="#10b981" fillOpacity="0.06" />
+          <path d={toArea(negPoints)} fill="#ef4444" fillOpacity="0.06" />
 
           {/* Lines */}
+          <path d={toPath(neuPoints)} fill="none" stroke="#64748b" strokeWidth="1.5"
+            strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round" />
           <path d={toPath(posPoints)} fill="none" stroke="#10b981" strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" />
           <path d={toPath(negPoints)} fill="none" stroke="#ef4444" strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" />
 
-          {/* Dots with native tooltip */}
+          {/* Crosshair */}
+          {hx !== null && (
+            <line x1={hx} y1={PAD.top} x2={hx} y2={PAD.top + ph}
+              stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 3" />
+          )}
+
+          {/* Dots */}
           {posPoints.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r="3.5" fill="#10b981" stroke="#0f172a" strokeWidth="2">
-              <title>{pts[i].month}: {pts[i].total ? Math.round((pts[i].positive / pts[i].total) * 100) : 0}% positive ({pts[i].positive} reviews)</title>
-            </circle>
+            <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 5 : 3.5}
+              fill="#10b981" stroke="#0f172a" strokeWidth="2"
+              style={{ transition: 'r 0.1s' }} />
           ))}
           {negPoints.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r="3.5" fill="#ef4444" stroke="#0f172a" strokeWidth="2">
-              <title>{pts[i].month}: {pts[i].total ? Math.round((pts[i].negative / pts[i].total) * 100) : 0}% negative ({pts[i].negative} reviews)</title>
-            </circle>
+            <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 5 : 3.5}
+              fill="#ef4444" stroke="#0f172a" strokeWidth="2"
+              style={{ transition: 'r 0.1s' }} />
+          ))}
+          {neuPoints.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 4 : 2.5}
+              fill="#64748b" stroke="#0f172a" strokeWidth="1.5"
+              style={{ transition: 'r 0.1s' }} />
           ))}
 
-          {/* X-axis month labels */}
+          {/* Invisible wider hit targets */}
+          {posPoints.map((p, i) => (
+            <rect key={i}
+              x={i === 0 ? p.x : (posPoints[i-1].x + p.x) / 2}
+              y={PAD.top} width={i === n-1 ? p.x - (posPoints[i-1]?.x + p.x) / 2 : ((posPoints[i+1]?.x ?? p.x) + p.x) / 2 - (i === 0 ? p.x : (posPoints[i-1].x + p.x) / 2)}
+              height={ph} fill="transparent"
+              onMouseEnter={() => setHoveredIdx(i)}
+            />
+          ))}
+
+          {/* X-axis labels */}
           {pts.map((p, i) => {
             if (i % step !== 0 && i !== n - 1) return null
-            const x = PAD.left + (n === 1 ? pw / 2 : (i / (n - 1)) * pw)
             const [year, month] = p.month.split('-')
             return (
-              <text key={i} x={x} y={H - 6} textAnchor="middle" fontSize="9" fill="#475569">
+              <text key={i} x={xOf(i)} y={H - 6} textAnchor="middle" fontSize="9" fill={hoveredIdx === i ? '#94a3b8' : '#475569'}>
                 {month}/{year.slice(2)}
               </text>
             )
           })}
         </svg>
 
+        {/* Floating tooltip */}
+        {hp !== null && hoveredIdx !== null && (
+          <div
+            className={`absolute top-4 pointer-events-none z-10 bg-slate-800 border border-white/10 rounded-xl px-3 py-2.5 shadow-xl text-xs min-w-[140px] ${tooltipOnRight ? 'left-[55%]' : 'right-[8%]'}`}
+          >
+            <p className="text-slate-300 font-semibold mb-1.5">{(() => {
+              const [year, month] = hp.month.split('-')
+              const names = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez']
+              return `${names[parseInt(month)-1]} ${year}`
+            })()}</p>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-emerald-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Positiv
+                </span>
+                <span className="text-white font-medium">{pctOf(hp.positive, hp.total)}%</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-red-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Negativ
+                </span>
+                <span className="text-white font-medium">{pctOf(hp.negative, hp.total)}%</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-slate-400 flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-slate-500 inline-block" />Neutral
+                </span>
+                <span className="text-white font-medium">{pctOf(hp.neutral, hp.total)}%</span>
+              </div>
+            </div>
+            <div className="mt-2 pt-2 border-t border-white/10 text-slate-500">
+              {hp.total.toLocaleString()} Reviews
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-5 mt-2 justify-end">
-          <span className="text-[10px] text-slate-500">
-            <span className="text-emerald-400 font-bold mr-1">—</span>Positive
+          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-emerald-400 inline-block rounded" />Positiv
           </span>
-          <span className="text-[10px] text-slate-500">
-            <span className="text-red-400 font-bold mr-1">—</span>Negative
+          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-red-400 inline-block rounded" />Negativ
+          </span>
+          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+            <span className="w-3 h-0.5 bg-slate-500 inline-block rounded border-dashed" />Neutral
           </span>
         </div>
       </div>
