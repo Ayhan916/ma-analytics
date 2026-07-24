@@ -51,103 +51,6 @@ function Stars({ score }: { score: number | null }) {
   return <span className="text-xs text-amber-400">{'★'.repeat(n)}{'☆'.repeat(5 - n)}</span>
 }
 
-function ClusterModal({ cluster, type, onClose }: { cluster: Cluster; type: 'issue' | 'strength'; onClose: () => void }) {
-  const isIssue = type === 'issue'
-  const accentText  = isIssue ? 'text-red-400'     : 'text-emerald-400'
-  const accentBg    = isIssue ? 'bg-red-400/10'    : 'bg-emerald-400/10'
-  const accentBorder= isIssue ? 'border-red-400/20': 'border-emerald-400/20'
-  const Icon = isIssue ? TrendingDown : TrendingUp
-
-  // Close on Escape
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 p-5 border-b border-white/[0.06]">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${accentBg} border ${accentBorder}`}>
-              <Icon size={14} className={accentText} />
-            </div>
-            <div className="min-w-0">
-              <p className="text-white text-sm font-semibold leading-snug">{cluster.label}</p>
-              <p className={`text-xs font-medium mt-0.5 ${accentText}`}>{cluster.mentions} mentions</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors shrink-0 mt-0.5">
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="overflow-y-auto p-5 space-y-5">
-          {/* Summary */}
-          <div>
-            <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-2">Summary</p>
-            <p className="text-slate-200 text-sm leading-relaxed">{cluster.summary}</p>
-          </div>
-
-          {/* Examples */}
-          {cluster.examples.length > 0 && (
-            <div>
-              <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">
-                Example reviews
-              </p>
-              <div className="space-y-2">
-                {cluster.examples.slice(0, 5).map(ex => (
-                  <div key={ex.id} className="bg-slate-800/60 border border-white/5 rounded-xl p-3">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <SentimentPill s={ex.sentiment} />
-                      <Stars score={ex.score} />
-                    </div>
-                    <p className="text-slate-300 text-xs leading-relaxed">{ex.content}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ClusterCard({ cluster, type }: { cluster: Cluster; type: 'issue' | 'strength' }) {
-  const [modalOpen, setModalOpen] = useState(false)
-  const isIssue = type === 'issue'
-  const accentText   = isIssue ? 'text-red-400'          : 'text-emerald-400'
-  const accentBorder = isIssue ? 'border-red-500/20'     : 'border-emerald-500/20'
-  const accentBg     = isIssue ? 'hover:bg-red-500/5'    : 'hover:bg-emerald-500/5'
-
-  return (
-    <>
-      <button
-        onClick={() => setModalOpen(true)}
-        className={`w-full text-left border ${accentBorder} ${accentBg} bg-slate-900/40 rounded-xl p-4 transition-colors group`}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-white text-sm font-medium leading-snug group-hover:text-white/90">{cluster.label}</p>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className={`text-xs font-semibold ${accentText}`}>{cluster.mentions} mentions</span>
-            <ChevronDown size={12} className="text-slate-600 -rotate-90" />
-          </div>
-        </div>
-      </button>
-
-      {modalOpen && (
-        <ClusterModal cluster={cluster} type={type} onClose={() => setModalOpen(false)} />
-      )}
-    </>
-  )
-}
 
 function AbsaFeatureCard({ feat, type, onSelect }: { feat: FeatureRow; type: 'issue' | 'request'; onSelect: (f: string) => void }) {
   const isIssue = type === 'issue'
@@ -542,12 +445,11 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
 // ─── Tab: Overview ───────────────────────────────────────────────────────────
 
-function OverviewTab({ datasourceId }: { datasourceId: string }) {
+function OverviewTab({ datasourceId, onSwitchTab }: { datasourceId: string; onSwitchTab: (tab: Tab) => void }) {
   const [summary, setSummary]       = useState<Summary | null>(null)
   const [matrix, setMatrix]         = useState<FeatureMatrix | null>(null)
   const [loading, setLoading]       = useState(true)
   const [loadError, setLoadError]   = useState(false)
-  const [selectedFeature, setSelectedFeature] = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -622,44 +524,81 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
       {/* Trend chart */}
       <SentimentTrendChart datasourceId={datasourceId} />
 
-      {/* Issues & Strengths — ABSA wenn verfügbar, sonst Cluster-Fallback */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <TrendingDown size={14} className="text-red-400" />
-            <h3 className="text-white text-sm font-semibold">Top Issues</h3>
-            {useAbsa && (
-              <span className="text-[10px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 px-1.5 py-0.5 rounded-full font-medium">ABSA</span>
-            )}
+      {/* Tool Teasers */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Issues Teaser */}
+        <div className="bg-slate-900/60 border border-red-500/15 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <TrendingDown size={13} className="text-red-400" />
+              </div>
+              <div>
+                <p className="text-white text-sm font-semibold">Issues</p>
+                <p className="text-slate-500 text-[10px]">{absaIssues.length} betroffene Features</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onSwitchTab('issues')}
+              className="text-[11px] text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-400/40 px-3 py-1 rounded-full transition-colors"
+            >
+              Alle anzeigen →
+            </button>
           </div>
-          <div className="space-y-3">
-            {useAbsa
-              ? absaIssues.length === 0
-                ? <Empty text="Keine Bug/Perf/UX-Signale gefunden." />
-                : absaIssues.map(f => <AbsaFeatureCard key={f.feature} feat={f} type="issue" onSelect={setSelectedFeature} />)
-              : summary.top_issues.length === 0
-                ? <Empty text="No issues detected." />
-                : summary.top_issues.map(c => <ClusterCard key={c.id} cluster={c} type="issue" />)
-            }
+          <div className="space-y-2">
+            {absaIssues.slice(0, 3).map(f => {
+              const bugCount  = f.signal_types.find(s => s.signal_type === 'bug')?.count ?? 0
+              const perfCount = f.signal_types.find(s => s.signal_type === 'performance')?.count ?? 0
+              const uxCount   = f.signal_types.find(s => s.signal_type === 'ux')?.count ?? 0
+              return (
+                <button key={f.feature} onClick={() => onSwitchTab('issues')}
+                  className="w-full flex items-center justify-between gap-3 text-left bg-slate-800/40 hover:bg-slate-800/70 border border-white/5 rounded-xl px-3 py-2.5 transition-colors group">
+                  <p className="text-slate-200 text-xs font-medium group-hover:text-white">{f.feature}</p>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {bugCount > 0 && <span className="text-[10px] text-red-400 bg-red-400/10 px-1.5 py-0.5 rounded-full">{bugCount} Bug</span>}
+                    {perfCount > 0 && <span className="text-[10px] text-orange-400 bg-orange-400/10 px-1.5 py-0.5 rounded-full">{perfCount} Perf</span>}
+                    {uxCount > 0 && <span className="text-[10px] text-amber-400 bg-amber-400/10 px-1.5 py-0.5 rounded-full">{uxCount} UX</span>}
+                  </div>
+                </button>
+              )
+            })}
+            {absaIssues.length === 0 && <p className="text-slate-600 text-xs text-center py-3">Keine Issues gefunden</p>}
           </div>
-        </section>
-        <section>
-          <div className="flex items-center gap-2 mb-3">
-            <Lightbulb size={14} className="text-violet-400" />
-            <h3 className="text-white text-sm font-semibold">Feature Requests</h3>
-            {useAbsa && (
-              <span className="text-[10px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 px-1.5 py-0.5 rounded-full font-medium">ABSA</span>
-            )}
+        </div>
+
+        {/* Ideas Teaser */}
+        <div className="bg-slate-900/60 border border-violet-500/15 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+                <Lightbulb size={13} className="text-violet-400" />
+              </div>
+              <div>
+                <p className="text-white text-sm font-semibold">Feature Requests</p>
+                <p className="text-slate-500 text-[10px]">{absaRequests.length} Features mit Wünschen</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onSwitchTab('ideas')}
+              className="text-[11px] text-violet-400 hover:text-violet-300 border border-violet-500/20 hover:border-violet-400/40 px-3 py-1 rounded-full transition-colors"
+            >
+              Alle anzeigen →
+            </button>
           </div>
-          <div className="space-y-3">
-            {useAbsa
-              ? absaRequests.length === 0
-                ? <Empty text="Keine Feature-Wünsche gefunden." />
-                : absaRequests.map(f => <AbsaFeatureCard key={f.feature} feat={f} type="request" onSelect={setSelectedFeature} />)
-              : <Empty text="Feature Requests nur mit ABSA verfügbar." />
-            }
+          <div className="space-y-2">
+            {absaRequests.slice(0, 3).map(f => {
+              const reqCount = f.signal_types.find(s => s.signal_type === 'feature_request')?.count ?? 0
+              return (
+                <button key={f.feature} onClick={() => onSwitchTab('ideas')}
+                  className="w-full flex items-center justify-between gap-3 text-left bg-slate-800/40 hover:bg-slate-800/70 border border-white/5 rounded-xl px-3 py-2.5 transition-colors group">
+                  <p className="text-slate-200 text-xs font-medium group-hover:text-white">{f.feature}</p>
+                  <span className="text-[10px] text-violet-400 bg-violet-400/10 px-1.5 py-0.5 rounded-full shrink-0">{reqCount} Wunsch{reqCount !== 1 ? '¨e' : ''}</span>
+                </button>
+              )
+            })}
+            {absaRequests.length === 0 && <p className="text-slate-600 text-xs text-center py-3">Keine Feature Requests gefunden</p>}
           </div>
-        </section>
+        </div>
       </div>
 
       {/* ABSA stats summary */}
@@ -667,15 +606,6 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
         <p className="text-slate-600 text-xs text-center">
           {matrix.n_topics} Features analysiert · {matrix.total_signals.toLocaleString()} Signale
         </p>
-      )}
-
-      {/* Feature Detail Modal */}
-      {selectedFeature && (
-        <FeatureDetailModal
-          feature={selectedFeature}
-          datasourceId={datasourceId}
-          onClose={() => setSelectedFeature(null)}
-        />
       )}
     </div>
   )
@@ -1060,70 +990,6 @@ function BackfillRepliesSection({ datasourceId }: { datasourceId: string }) {
   )
 }
 
-function ClusterGeneralSection({ datasourceId }: { datasourceId: string }) {
-  const [status, setStatus]   = useState<'idle' | 'running' | 'done' | 'error'>('idle')
-  const [jobId, setJobId]     = useState<string | null>(null)
-  const [result, setResult]   = useState<{ changed: number; clusters: number } | null>(null)
-
-  const start = async () => {
-    setStatus('running')
-    setResult(null)
-    try {
-      const res = await intelligenceApi.clusterGeneral(datasourceId)
-      setJobId(res.job_id)
-      const poll = setInterval(async () => {
-        try {
-          const job = await apiClient.get(`/jobs/${res.job_id}`).then(r => r.data)
-          if (job.status === 'done') {
-            clearInterval(poll)
-            setStatus('done')
-            const m = (job.progress || '').match(/cluster_general_done_(\d+)_updated_(\d+)_clusters/)
-            if (m) setResult({ changed: parseInt(m[1]), clusters: parseInt(m[2]) })
-          } else if (job.status === 'failed') {
-            clearInterval(poll); setStatus('error')
-          }
-        } catch { clearInterval(poll); setStatus('error') }
-      }, 4000)
-    } catch { setStatus('error') }
-  }
-
-  return (
-    <section>
-      <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Semantisches Clustering</p>
-      <div className="bg-slate-900 border border-white/10 rounded-xl p-4 flex items-start gap-4">
-        <div className="flex-1">
-          <p className="text-white text-sm font-medium mb-1">„General" Reviews clustern</p>
-          <p className="text-slate-400 text-xs leading-relaxed">
-            Gruppiert verbleibende „General"-Einträge per HDBSCAN anhand ihrer Embeddings und
-            beschriftet jeden Cluster mit Groq. Keine Neuberechnung der Embeddings nötig.
-          </p>
-          {status === 'running' && (
-            <p className="text-indigo-400 text-xs mt-2">Läuft — Job {jobId?.slice(0, 8)}… (1–2 Min.)</p>
-          )}
-          {status === 'done' && result && (
-            <p className="text-emerald-400 text-xs mt-2">
-              Fertig — {result.changed} Reviews in {result.clusters} Cluster eingeteilt.
-            </p>
-          )}
-          {status === 'done' && !result && (
-            <p className="text-emerald-400 text-xs mt-2">Fertig.</p>
-          )}
-          {status === 'error' && (
-            <p className="text-red-400 text-xs mt-2">Fehler beim Clustering.</p>
-          )}
-        </div>
-        <button
-          onClick={start}
-          disabled={status === 'running'}
-          className="shrink-0 flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-white/10 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
-        >
-          <RefreshCw size={12} className={status === 'running' ? 'animate-spin' : ''} />
-          {status === 'running' ? 'Läuft…' : 'Starten'}
-        </button>
-      </div>
-    </section>
-  )
-}
 
 function ReclassifyGeneralSection({ datasourceId }: { datasourceId: string }) {
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
@@ -1530,6 +1396,139 @@ const SIGNAL_COLORS: Record<string, string> = {
   general:         'text-slate-400 bg-slate-400/10 border-slate-400/20',
 }
 
+// ─── Tab: Issues ─────────────────────────────────────────────────────────────
+
+function IssuesTab({ datasourceId }: { datasourceId: string }) {
+  const [matrix, setMatrix]   = useState<FeatureMatrix | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [signalFilter, setSignalFilter] = useState<string | null>(null)
+  const [selectedFeature, setSelectedFeature] = useState<string | null>(null)
+
+  useEffect(() => {
+    intelligenceApi.matrix(datasourceId)
+      .then(setMatrix).catch(() => {}).finally(() => setLoading(false))
+  }, [datasourceId])
+
+  const allIssues = (matrix?.features ?? [])
+    .filter(f => f.feature !== 'General')
+    .map(f => ({
+      ...f,
+      bugLike: (f.signal_types.find(s => s.signal_type === 'bug')?.count ?? 0)
+             + (f.signal_types.find(s => s.signal_type === 'performance')?.count ?? 0)
+             + (f.signal_types.find(s => s.signal_type === 'ux')?.count ?? 0),
+    }))
+    .filter(f => f.bugLike > 0)
+    .sort((a, b) => b.bugLike - a.bugLike)
+
+  const displayed = signalFilter
+    ? allIssues.filter(f => (f.signal_types.find(s => s.signal_type === signalFilter)?.count ?? 0) > 0)
+    : allIssues
+
+  const ISSUE_FILTERS = [
+    { key: 'bug',         label: 'Bug',         active: 'text-red-400 bg-red-400/10 border-red-400/30',    inactive: 'text-slate-500 border-slate-700 hover:text-red-400 hover:border-red-500/40' },
+    { key: 'performance', label: 'Performance',  active: 'text-orange-400 bg-orange-400/10 border-orange-400/30', inactive: 'text-slate-500 border-slate-700 hover:text-orange-400 hover:border-orange-500/40' },
+    { key: 'ux',          label: 'UX',           active: 'text-amber-400 bg-amber-400/10 border-amber-400/30',   inactive: 'text-slate-500 border-slate-700 hover:text-amber-400 hover:border-amber-500/40' },
+  ]
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+            <TrendingDown size={14} className="text-red-400" />
+          </div>
+          <div>
+            <p className="text-white font-semibold">Issues</p>
+            <p className="text-slate-500 text-xs">{displayed.length} Features · Erfahrungen aus Nutzerfeedback</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {ISSUE_FILTERS.map(f => (
+            <button key={f.key}
+              onClick={() => setSignalFilter(prev => prev === f.key ? null : f.key)}
+              className={`text-xs px-2.5 py-1 rounded-full border transition-all ${signalFilter === f.key ? f.active : f.inactive}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {displayed.length === 0
+        ? <Empty text="Keine Issues für diesen Filter gefunden." />
+        : <div className="space-y-3">
+            {displayed.map(f => (
+              <AbsaFeatureCard key={f.feature} feat={f} type="issue" onSelect={setSelectedFeature} />
+            ))}
+          </div>
+      }
+
+      {selectedFeature && (
+        <FeatureDetailModal
+          feature={selectedFeature}
+          datasourceId={datasourceId}
+          hiddenSignalTypes={['feature_request', 'resolution']}
+          onClose={() => setSelectedFeature(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Tab: Ideas ──────────────────────────────────────────────────────────────
+
+function IdeasTab({ datasourceId }: { datasourceId: string }) {
+  const [matrix, setMatrix]   = useState<FeatureMatrix | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [selectedFeature, setSelectedFeature] = useState<string | null>(null)
+
+  useEffect(() => {
+    intelligenceApi.matrix(datasourceId)
+      .then(setMatrix).catch(() => {}).finally(() => setLoading(false))
+  }, [datasourceId])
+
+  const ideas = (matrix?.features ?? [])
+    .filter(f => f.feature !== 'General')
+    .map(f => ({ ...f, reqCount: f.signal_types.find(s => s.signal_type === 'feature_request')?.count ?? 0 }))
+    .filter(f => f.reqCount > 0)
+    .sort((a, b) => b.reqCount - a.reqCount)
+
+  if (loading) return <Spinner />
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+          <Lightbulb size={14} className="text-violet-400" />
+        </div>
+        <div>
+          <p className="text-white font-semibold">Feature Requests</p>
+          <p className="text-slate-500 text-xs">{ideas.length} Features · Ideen und Wünsche aus Nutzerfeedback</p>
+        </div>
+      </div>
+
+      {ideas.length === 0
+        ? <Empty text="Keine Feature Requests gefunden." />
+        : <div className="space-y-3">
+            {ideas.map(f => (
+              <AbsaFeatureCard key={f.feature} feat={f} type="request" onSelect={setSelectedFeature} />
+            ))}
+          </div>
+      }
+
+      {selectedFeature && (
+        <FeatureDetailModal
+          feature={selectedFeature}
+          datasourceId={datasourceId}
+          lockedSignalType="feature_request"
+          onClose={() => setSelectedFeature(null)}
+        />
+      )}
+    </div>
+  )
+}
+
 const SIGNAL_LABELS: Record<string, string> = {
   bug: 'Bug', performance: 'Performance', ux: 'UX', feature_request: 'Feature Request',
   resolution: 'Behoben', competitive: 'Wettbewerb', brand: 'Marke', general: 'Allgemein',
@@ -1543,10 +1542,16 @@ function SeverityDot({ severity }: { severity: number | null }) {
   )
 }
 
-function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: string; datasourceId: string; onClose: () => void }) {
+function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, hiddenSignalTypes }: {
+  feature: string
+  datasourceId: string
+  onClose: () => void
+  lockedSignalType?: string
+  hiddenSignalTypes?: string[]
+}) {
   const [detail, setDetail]               = useState<FeatureDetail | null>(null)
   const [loading, setLoading]             = useState(true)
-  const [signalTypeFilter, setSignalTypeFilter] = useState<string | null>(null)
+  const [signalTypeFilter, setSignalTypeFilter] = useState<string | null>(() => lockedSignalType ?? null)
   const [versionFilter, setVersionFilter] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<string | null>(null)
   const [filteredSignals, setFilteredSignals] = useState<SentenceSignal[] | null>(null)
@@ -1588,13 +1593,25 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
       .finally(() => setLoadingFilter(false))
   }, [signalTypeFilter, versionFilter, sortBy, feature, datasourceId])
 
-  const hasFilter = !!(signalTypeFilter || versionFilter || sortBy)
   const displaySignals = filteredSignals ?? detail?.top_signals ?? []
 
-  const toggleSignalType = (st: string) => { setSignalTypeFilter(prev => prev === st ? null : st); setFilteredSignals(null) }
+  const toggleSignalType = (st: string) => {
+    if (lockedSignalType) return
+    setSignalTypeFilter(prev => prev === st ? null : st)
+    setFilteredSignals(null)
+  }
   const toggleVersion    = (v: string)  => { setVersionFilter(prev => prev === v ? null : v);      setFilteredSignals(null) }
   const toggleSort       = (s: string)  => { setSortBy(prev => prev === s ? null : s);             setFilteredSignals(null) }
-  const clearFilters = () => { setSignalTypeFilter(null); setVersionFilter(null); setSortBy(null); setFilteredSignals(null) }
+  const clearFilters = () => {
+    if (!lockedSignalType) setSignalTypeFilter(null)
+    setVersionFilter(null)
+    setSortBy(null)
+    setFilteredSignals(null)
+  }
+
+  const hasFilter = !!(
+    (signalTypeFilter && signalTypeFilter !== lockedSignalType) || versionFilter || sortBy
+  )
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
@@ -1604,11 +1621,25 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
         {/* Header */}
         <div className="flex items-center justify-between gap-4 p-5 border-b border-white/[0.06]">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center">
-              <Cpu size={14} className="text-indigo-400" />
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center border ${
+              lockedSignalType === 'feature_request'
+                ? 'bg-violet-500/20 border-violet-500/30'
+                : 'bg-indigo-500/20 border-indigo-500/30'
+            }`}>
+              {lockedSignalType === 'feature_request'
+                ? <Lightbulb size={14} className="text-violet-400" />
+                : <Cpu size={14} className="text-indigo-400" />
+              }
             </div>
             <div>
-              <p className="text-white text-sm font-semibold">{feature}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-white text-sm font-semibold">{feature}</p>
+                {lockedSignalType && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium text-violet-400 bg-violet-400/10 border border-violet-400/20">
+                    {SIGNAL_LABELS[lockedSignalType] ?? lockedSignalType}
+                  </span>
+                )}
+              </div>
               {detail && <p className="text-slate-500 text-xs">{detail.mention_count} Signale{detail.avg_severity ? ` · Ø Severity ${detail.avg_severity.toFixed(1)}` : ''}</p>}
             </div>
           </div>
@@ -1628,31 +1659,35 @@ function FeatureDetailModal({ feature, datasourceId, onClose }: { feature: strin
               </div>
             )}
 
-            {/* Signal-Typen — klickbar zum Filtern */}
-            <div>
-              <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">
-                Signal-Typen <span className="text-slate-700 font-normal normal-case">— klicken zum Filtern</span>
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {detail.signal_types.map(st => {
-                  const isActive = signalTypeFilter === st.signal_type
-                  return (
-                    <button
-                      key={st.signal_type}
-                      onClick={() => toggleSignalType(st.signal_type)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-all
-                        ${isActive
-                          ? (SIGNAL_COLORS[st.signal_type] ?? SIGNAL_COLORS.general) + ' ring-1 ring-inset ring-current/30 scale-105'
-                          : 'text-slate-400 bg-slate-800/60 border-slate-700/60 hover:border-slate-600'
-                        }`}
-                    >
-                      {SIGNAL_LABELS[st.signal_type] ?? st.signal_type}
-                      <span className="opacity-70">({st.count})</span>
-                    </button>
-                  )
-                })}
+            {/* Signal-Typen — ausgeblendet wenn Kontext gesperrt (z.B. Ideas-Tab) */}
+            {!lockedSignalType && (
+              <div>
+                <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">
+                  Signal-Typen <span className="text-slate-700 font-normal normal-case">— klicken zum Filtern</span>
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {detail.signal_types
+                    .filter(st => !(hiddenSignalTypes ?? []).includes(st.signal_type))
+                    .map(st => {
+                      const isActive = signalTypeFilter === st.signal_type
+                      return (
+                        <button
+                          key={st.signal_type}
+                          onClick={() => toggleSignalType(st.signal_type)}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-all
+                            ${isActive
+                              ? (SIGNAL_COLORS[st.signal_type] ?? SIGNAL_COLORS.general) + ' ring-1 ring-inset ring-current/30 scale-105'
+                              : 'text-slate-400 bg-slate-800/60 border-slate-700/60 hover:border-slate-600'
+                            }`}
+                        >
+                          {SIGNAL_LABELS[st.signal_type] ?? st.signal_type}
+                          <span className="opacity-70">({st.count})</span>
+                        </button>
+                      )
+                    })}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Version-Trend — klickbar zum Filtern */}
             {detail.version_trend.length > 0 && (
@@ -2225,13 +2260,15 @@ function Empty({ text }: { text: string }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'reviews' | 'insights' | 'versions' | 'intelligence'
+type Tab = 'overview' | 'issues' | 'ideas' | 'reviews' | 'insights' | 'versions' | 'intelligence'
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: 'overview',     label: 'Overview',     icon: LayoutGrid },
+  { id: 'issues',       label: 'Issues',       icon: TrendingDown },
+  { id: 'ideas',        label: 'Ideas',        icon: Lightbulb },
   { id: 'reviews',      label: 'Reviews',      icon: Search },
   { id: 'insights',     label: 'Insights',     icon: Sparkles },
-  { id: 'versions',     label: 'Versions',     icon: TrendingDown },
+  { id: 'versions',     label: 'Versions',     icon: TrendingUp },
   { id: 'intelligence', label: 'Intelligence', icon: Cpu },
 ]
 
@@ -2335,7 +2372,9 @@ export function AppDetailPage() {
 
         {/* Tab content */}
         <div className="max-w-5xl mx-auto px-6 py-8">
-          {tab === 'overview'     && <OverviewTab     datasourceId={id} />}
+          {tab === 'overview'     && <OverviewTab     datasourceId={id} onSwitchTab={setTab} />}
+          {tab === 'issues'       && <IssuesTab       datasourceId={id} />}
+          {tab === 'ideas'        && <IdeasTab        datasourceId={id} />}
           {tab === 'reviews'      && <ReviewsTab      datasourceId={id} />}
           {tab === 'insights'     && <InsightsTab     datasourceId={id} />}
           {tab === 'versions'     && <VersionsTab     datasourceId={id} />}
