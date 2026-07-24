@@ -23,8 +23,9 @@ interface SearchResult {
   review_id: string; content: string; score: number | null
   sentiment: string | null; reviewed_at: string | null; similarity: number
 }
-interface TrendPoint { month: string; positive: number; negative: number; neutral: number; total: number }
-interface TrendData  { datasource_id: string; points: TrendPoint[] }
+interface TrendPoint { month: string; positive: number; negative: number; neutral: number; total: number; avg_rating: number | null }
+interface VersionMarker { month: string; version: string }
+interface TrendData  { datasource_id: string; points: TrendPoint[]; version_markers: VersionMarker[] }
 interface DataSource { id: string; name: string; type: string; app_id: string | null; job_status: string | null; review_count: number; last_synced: string | null }
 interface ReviewAspect { aspect_term: string | null; feature: string; sentiment: string; confidence: number | null }
 
@@ -196,10 +197,13 @@ function AbsaFeatureCard({ feat, type, onSelect }: { feat: FeatureRow; type: 'is
 
 // ─── Sentiment Trend Chart ───────────────────────────────────────────────────
 
+type TimeRange = '3M' | '6M' | '1J' | 'Alles'
+
 function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
-  const [trend, setTrend]     = useState<TrendData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [trend, setTrend]         = useState<TrendData | null>(null)
+  const [loading, setLoading]     = useState(true)
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
+  const [range, setRange]         = useState<TimeRange>('Alles')
   const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
@@ -220,16 +224,20 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
     </div>
   )
 
-  const W = 600, H = 200
-  const PAD = { top: 16, right: 24, bottom: 44, left: 44 }
-  const pw = W - PAD.left - PAD.right
-  const ph = H - PAD.top - PAD.bottom
-
-  const pts = trend.points
+  // ── Time range filter ──
+  const allPts = trend.points
+  const rangeMap: Record<TimeRange, number> = { '3M': 3, '6M': 6, '1J': 12, 'Alles': Infinity }
+  const pts = rangeMap[range] === Infinity ? allPts : allPts.slice(-rangeMap[range])
   const n   = pts.length
 
-  const xOf = (i: number) => PAD.left + (n === 1 ? pw / 2 : (i / (n - 1)) * pw)
-  const yOf = (pct: number) => PAD.top + (1 - pct / 100) * ph
+  const W = 600, H = 210
+  const PAD = { top: 20, right: 60, bottom: 44, left: 44 }
+  const pw = W - PAD.left - PAD.right
+  const ph = H - PAD.top - PAD.bottom
+  const MAX_BAR_H = 35  // max height of volume bars (px in viewBox)
+
+  const xOf   = (i: number) => PAD.left + (n === 1 ? pw / 2 : (i / (n - 1)) * pw)
+  const yOf   = (pct: number) => PAD.top + (1 - pct / 100) * ph
   const pctOf = (val: number, total: number) => total ? Math.round((val / total) * 100) : 0
 
   const posPoints = pts.map((p, i) => ({ x: xOf(i), y: yOf(pctOf(p.positive, p.total)) }))
@@ -238,59 +246,84 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
   const toPath = (points: { x: number; y: number }[]) =>
     points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
-
   const toArea = (points: { x: number; y: number }[]) => {
     const base = PAD.top + ph
     return `${toPath(points)} L ${points[points.length-1].x.toFixed(1)} ${base} L ${points[0].x.toFixed(1)} ${base} Z`
   }
 
-  const gridPcts = [0, 25, 50, 75, 100]
-  const step = n <= 6 ? 1 : n <= 12 ? 2 : Math.ceil(n / 6)
+  // Volume bars
+  const maxTotal = Math.max(...pts.map(p => p.total), 1)
+  const barW     = n > 1 ? Math.max(4, (pw / n) * 0.5) : 20
 
-  // Trend summary: compare last 3 vs first 3 months
+  // Rating line (normalized 0-5 → 0-100%)
+  const hasRating = pts.some(p => p.avg_rating !== null)
+  const ratingPoints = hasRating
+    ? pts.map((p, i) => ({ x: xOf(i), y: yOf(p.avg_rating !== null ? (p.avg_rating / 5) * 100 : 0), r: p.avg_rating }))
+    : []
+
+  // Version markers — only within selected range and dedupe per month
+  const monthsInView = new Set(pts.map(p => p.month))
+  const markersInView = (trend.version_markers ?? []).filter(m => monthsInView.has(m.month))
+  // dedupe: keep only first version per month to avoid overlap
+  const markersByMonth = new Map<string, string>()
+  markersInView.forEach(m => { if (!markersByMonth.has(m.month)) markersByMonth.set(m.month, m.version) })
+
+  // Trend summary
   const trendSuffix = (() => {
     if (n < 4) return null
     const half = Math.min(3, Math.floor(n / 2))
-    const recent = pts.slice(-half)
-    const early  = pts.slice(0, half)
-    const avgRecent = recent.reduce((s, p) => s + pctOf(p.positive, p.total), 0) / half
-    const avgEarly  = early.reduce((s, p)  => s + pctOf(p.positive, p.total), 0) / half
-    const delta = Math.round(avgRecent - avgEarly)
+    const recent = pts.slice(-half), early = pts.slice(0, half)
+    const avg = (arr: TrendPoint[]) => arr.reduce((s, p) => s + pctOf(p.positive, p.total), 0) / arr.length
+    const delta = Math.round(avg(recent) - avg(early))
     if (Math.abs(delta) < 2) return null
     return delta > 0
-      ? { label: `+${delta}% positiv (letzte ${half} Monate)`, color: 'text-emerald-400' }
-      : { label: `${delta}% positiv (letzte ${half} Monate)`, color: 'text-red-400' }
+      ? { label: `▲ +${delta}% positiv`, color: 'text-emerald-400' }
+      : { label: `▼ ${delta}% positiv`, color: 'text-red-400' }
   })()
+
+  const gridPcts = [0, 25, 50, 75, 100]
+  const step = n <= 6 ? 1 : n <= 12 ? 2 : Math.ceil(n / 6)
+  const MONTH_NAMES = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez']
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = svgRef.current
     if (!svg) return
     const rect = svg.getBoundingClientRect()
-    const scaleX = W / rect.width
-    const mouseX = (e.clientX - rect.left) * scaleX
-    let closest = 0
-    let minDist = Infinity
-    posPoints.forEach((p, i) => {
-      const d = Math.abs(p.x - mouseX)
-      if (d < minDist) { minDist = d; closest = i }
-    })
+    const mouseX = (e.clientX - rect.left) * (W / rect.width)
+    let closest = 0, minDist = Infinity
+    posPoints.forEach((p, i) => { const d = Math.abs(p.x - mouseX); if (d < minDist) { minDist = d; closest = i } })
     setHoveredIdx(closest)
   }
 
-  const hp = hoveredIdx !== null ? pts[hoveredIdx] : null
-  const hx = hoveredIdx !== null ? posPoints[hoveredIdx].x : null
-
-  // Tooltip left/right positioning
-  const tooltipOnRight = hoveredIdx !== null && hoveredIdx < n / 2
+  const hp  = hoveredIdx !== null ? pts[hoveredIdx] : null
+  const hx  = hoveredIdx !== null ? posPoints[hoveredIdx].x : null
+  const tooltipRight = hoveredIdx !== null && hoveredIdx < n / 2
 
   return (
     <div>
+      {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">Sentiment Trend</p>
-        {trendSuffix && (
-          <span className={`text-[10px] font-medium ${trendSuffix.color}`}>{trendSuffix.label}</span>
-        )}
+        <div className="flex items-center gap-3">
+          <p className="text-slate-500 text-xs font-medium uppercase tracking-wider">Sentiment Trend</p>
+          {trendSuffix && (
+            <span className={`text-[10px] font-semibold ${trendSuffix.color}`}>{trendSuffix.label}</span>
+          )}
+        </div>
+        {/* Time range filter */}
+        <div className="flex gap-1">
+          {(['3M','6M','1J','Alles'] as TimeRange[]).map(r => (
+            <button key={r} onClick={() => { setRange(r); setHoveredIdx(null) }}
+              className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors ${
+                range === r
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+              }`}>
+              {r}
+            </button>
+          ))}
+        </div>
       </div>
+
       <div className="bg-slate-900 border border-white/10 rounded-xl p-4 relative">
         <svg
           ref={svgRef}
@@ -299,7 +332,7 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
           onMouseMove={handleMouseMove}
           onMouseLeave={() => setHoveredIdx(null)}
         >
-          {/* Grid */}
+          {/* Grid lines */}
           {gridPcts.map(pct => {
             const y = yOf(pct)
             return (
@@ -311,17 +344,62 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
             )
           })}
 
-          {/* Area fills */}
-          <path d={toArea(posPoints)} fill="#10b981" fillOpacity="0.06" />
-          <path d={toArea(negPoints)} fill="#ef4444" fillOpacity="0.06" />
+          {/* Volume bars (background) */}
+          {pts.map((p, i) => {
+            const bh = (p.total / maxTotal) * MAX_BAR_H
+            return (
+              <rect key={i}
+                x={xOf(i) - barW / 2} y={PAD.top + ph - bh}
+                width={barW} height={bh}
+                fill={hoveredIdx === i ? '#64748b' : '#334155'}
+                fillOpacity={hoveredIdx === i ? 0.5 : 0.3}
+                rx="1"
+              />
+            )
+          })}
 
-          {/* Lines */}
+          {/* Version markers */}
+          {Array.from(markersByMonth.entries()).map(([month, version]) => {
+            const idx = pts.findIndex(p => p.month === month)
+            if (idx < 0) return null
+            const x = xOf(idx)
+            return (
+              <g key={month}>
+                <line x1={x} y1={PAD.top} x2={x} y2={PAD.top + ph}
+                  stroke="#6366f1" strokeWidth="1" strokeDasharray="3 3" strokeOpacity="0.6" />
+                <text x={x + 3} y={PAD.top + 9} fontSize="7.5" fill="#818cf8" fontWeight="500">
+                  {version.length > 8 ? version.slice(0, 8) : version}
+                </text>
+              </g>
+            )
+          })}
+
+          {/* Area fills */}
+          <path d={toArea(posPoints)} fill="#10b981" fillOpacity="0.07" />
+          <path d={toArea(negPoints)} fill="#ef4444" fillOpacity="0.07" />
+
+          {/* Neutral line */}
           <path d={toPath(neuPoints)} fill="none" stroke="#64748b" strokeWidth="1.5"
             strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Sentiment lines */}
           <path d={toPath(posPoints)} fill="none" stroke="#10b981" strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" />
           <path d={toPath(negPoints)} fill="none" stroke="#ef4444" strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Rating line */}
+          {hasRating && ratingPoints.length > 1 && (
+            <>
+              <path d={toPath(ratingPoints)} fill="none" stroke="#f59e0b" strokeWidth="1.5"
+                strokeDasharray="5 2" strokeLinecap="round" strokeLinejoin="round" />
+              {/* Right Y-axis rating labels */}
+              {[1,2,3,4,5].map(r => (
+                <text key={r} x={W - PAD.right + 6} y={yOf((r/5)*100) + 3.5}
+                  fontSize="8" fill="#92400e">{r}★</text>
+              ))}
+            </>
+          )}
 
           {/* Crosshair */}
           {hx !== null && (
@@ -332,37 +410,39 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
           {/* Dots */}
           {posPoints.map((p, i) => (
             <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 5 : 3.5}
-              fill="#10b981" stroke="#0f172a" strokeWidth="2"
-              style={{ transition: 'r 0.1s' }} />
+              fill="#10b981" stroke="#0f172a" strokeWidth="2" />
           ))}
           {negPoints.map((p, i) => (
             <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 5 : 3.5}
-              fill="#ef4444" stroke="#0f172a" strokeWidth="2"
-              style={{ transition: 'r 0.1s' }} />
+              fill="#ef4444" stroke="#0f172a" strokeWidth="2" />
           ))}
           {neuPoints.map((p, i) => (
             <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 4 : 2.5}
-              fill="#64748b" stroke="#0f172a" strokeWidth="1.5"
-              style={{ transition: 'r 0.1s' }} />
+              fill="#64748b" stroke="#0f172a" strokeWidth="1.5" />
           ))}
+          {hasRating && ratingPoints.map((p, i) => p.r !== null ? (
+            <circle key={i} cx={p.x} cy={p.y} r={hoveredIdx === i ? 4 : 2.5}
+              fill="#f59e0b" stroke="#0f172a" strokeWidth="1.5" />
+          ) : null)}
 
-          {/* Invisible wider hit targets */}
-          {posPoints.map((p, i) => (
-            <rect key={i}
-              x={i === 0 ? p.x : (posPoints[i-1].x + p.x) / 2}
-              y={PAD.top} width={i === n-1 ? p.x - (posPoints[i-1]?.x + p.x) / 2 : ((posPoints[i+1]?.x ?? p.x) + p.x) / 2 - (i === 0 ? p.x : (posPoints[i-1].x + p.x) / 2)}
-              height={ph} fill="transparent"
-              onMouseEnter={() => setHoveredIdx(i)}
-            />
-          ))}
+          {/* Invisible hit areas */}
+          {posPoints.map((p, i) => {
+            const x0 = i === 0 ? PAD.left : (posPoints[i-1].x + p.x) / 2
+            const x1 = i === n-1 ? PAD.left + pw : ((posPoints[i+1]?.x ?? p.x) + p.x) / 2
+            return (
+              <rect key={i} x={x0} y={PAD.top} width={x1 - x0} height={ph}
+                fill="transparent" onMouseEnter={() => setHoveredIdx(i)} />
+            )
+          })}
 
           {/* X-axis labels */}
           {pts.map((p, i) => {
             if (i % step !== 0 && i !== n - 1) return null
             const [year, month] = p.month.split('-')
             return (
-              <text key={i} x={xOf(i)} y={H - 6} textAnchor="middle" fontSize="9" fill={hoveredIdx === i ? '#94a3b8' : '#475569'}>
-                {month}/{year.slice(2)}
+              <text key={i} x={xOf(i)} y={H - 6} textAnchor="middle" fontSize="9"
+                fill={hoveredIdx === i ? '#94a3b8' : '#475569'}>
+                {MONTH_NAMES[parseInt(month)-1]}/{year.slice(2)}
               </text>
             )
           })}
@@ -370,49 +450,62 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
         {/* Floating tooltip */}
         {hp !== null && hoveredIdx !== null && (
-          <div
-            className={`absolute top-4 pointer-events-none z-10 bg-slate-800 border border-white/10 rounded-xl px-3 py-2.5 shadow-xl text-xs min-w-[140px] ${tooltipOnRight ? 'left-[55%]' : 'right-[8%]'}`}
-          >
-            <p className="text-slate-300 font-semibold mb-1.5">{(() => {
-              const [year, month] = hp.month.split('-')
-              const names = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez']
-              return `${names[parseInt(month)-1]} ${year}`
-            })()}</p>
-            <div className="space-y-1">
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-emerald-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Positiv
-                </span>
+          <div className={`absolute top-4 pointer-events-none z-10 bg-slate-800 border border-white/10 rounded-xl px-3 py-2.5 shadow-xl text-xs min-w-[152px] ${tooltipRight ? 'left-[38%]' : 'right-[12%]'}`}>
+            <p className="text-slate-300 font-semibold mb-2">
+              {MONTH_NAMES[parseInt(hp.month.split('-')[1])-1]} {hp.month.split('-')[0]}
+            </p>
+            <div className="space-y-1.5">
+              <div className="flex justify-between gap-4">
+                <span className="text-emerald-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />Positiv</span>
                 <span className="text-white font-medium">{pctOf(hp.positive, hp.total)}%</span>
               </div>
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-red-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Negativ
-                </span>
+              <div className="flex justify-between gap-4">
+                <span className="text-red-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />Negativ</span>
                 <span className="text-white font-medium">{pctOf(hp.negative, hp.total)}%</span>
               </div>
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-slate-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-slate-500 inline-block" />Neutral
-                </span>
+              <div className="flex justify-between gap-4">
+                <span className="text-slate-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0" />Neutral</span>
                 <span className="text-white font-medium">{pctOf(hp.neutral, hp.total)}%</span>
               </div>
+              {hp.avg_rating !== null && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-amber-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />Ø Rating</span>
+                  <span className="text-white font-medium">{hp.avg_rating?.toFixed(1)} ★</span>
+                </div>
+              )}
             </div>
-            <div className="mt-2 pt-2 border-t border-white/10 text-slate-500">
-              {hp.total.toLocaleString()} Reviews
+            <div className="mt-2 pt-2 border-t border-white/10 flex justify-between text-slate-500">
+              <span>{hp.total.toLocaleString()} Reviews</span>
+              {markersByMonth.get(hp.month) && (
+                <span className="text-indigo-400">{markersByMonth.get(hp.month)}</span>
+              )}
             </div>
           </div>
         )}
 
-        <div className="flex gap-5 mt-2 justify-end">
-          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+        {/* Legend */}
+        <div className="flex flex-wrap gap-4 mt-2 justify-end items-center">
+          <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
             <span className="w-3 h-0.5 bg-emerald-400 inline-block rounded" />Positiv
           </span>
-          <span className="text-[10px] text-slate-500 flex items-center gap-1">
+          <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
             <span className="w-3 h-0.5 bg-red-400 inline-block rounded" />Negativ
           </span>
-          <span className="text-[10px] text-slate-500 flex items-center gap-1">
-            <span className="w-3 h-0.5 bg-slate-500 inline-block rounded border-dashed" />Neutral
+          <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+            <span className="w-3 h-0.5 bg-slate-500 inline-block rounded" />Neutral
+          </span>
+          {hasRating && (
+            <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+              <span className="w-3 h-0.5 bg-amber-400 inline-block rounded" />Ø Rating
+            </span>
+          )}
+          {markersByMonth.size > 0 && (
+            <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+              <span className="w-3 h-0.5 bg-indigo-400 inline-block rounded border-dashed" />Version
+            </span>
+          )}
+          <span className="text-[10px] text-slate-500 flex items-center gap-1.5">
+            <span className="w-2 h-2 bg-slate-700 inline-block rounded-sm opacity-60" />Volumen
           </span>
         </div>
       </div>

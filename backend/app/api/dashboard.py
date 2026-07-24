@@ -280,11 +280,18 @@ class SentimentTrendPoint(BaseModel):
     negative: int
     neutral: int
     total: int
+    avg_rating: float | None = None
+
+
+class VersionMarker(BaseModel):
+    month: str
+    version: str
 
 
 class SentimentTrend(BaseModel):
     datasource_id: str
     points: list[SentimentTrendPoint]
+    version_markers: list[VersionMarker] = []
 
 
 @router.get("/sentiment-trend", response_model=SentimentTrend)
@@ -303,7 +310,8 @@ async def get_sentiment_trend(
                 COUNT(*) FILTER (WHERE sentiment = 'positive') AS positive,
                 COUNT(*) FILTER (WHERE sentiment = 'negative') AS negative,
                 COUNT(*) FILTER (WHERE sentiment = 'neutral')  AS neutral,
-                COUNT(*) AS total
+                COUNT(*) AS total,
+                ROUND(AVG(score) FILTER (WHERE score IS NOT NULL)::numeric, 2) AS avg_rating
             FROM reviews
             WHERE datasource_id = :ds_id
               AND COALESCE(reviewed_at, created_at) IS NOT NULL
@@ -320,10 +328,36 @@ async def get_sentiment_trend(
             negative=row.negative or 0,
             neutral=row.neutral or 0,
             total=row.total or 0,
+            avg_rating=float(row.avg_rating) if row.avg_rating is not None else None,
         )
         for row in rows
     ]
-    return SentimentTrend(datasource_id=datasource_id, points=points)
+
+    # Version markers: first month each version appeared in reviews
+    ver_result = await db.execute(
+        text("""
+            SELECT
+                to_char(date_trunc('month', MIN(COALESCE(reviewed_at, created_at))), 'YYYY-MM') AS month,
+                version
+            FROM reviews
+            WHERE datasource_id = :ds_id
+              AND version IS NOT NULL AND version != ''
+              AND COALESCE(reviewed_at, created_at) IS NOT NULL
+            GROUP BY version
+            ORDER BY MIN(COALESCE(reviewed_at, created_at))
+        """),
+        {"ds_id": datasource_id},
+    )
+    version_markers = [
+        VersionMarker(month=row.month, version=row.version)
+        for row in ver_result.fetchall()
+    ]
+
+    return SentimentTrend(
+        datasource_id=datasource_id,
+        points=points,
+        version_markers=version_markers,
+    )
 
 
 # ─── Version Analysis ────────────────────────────────────────────────────────
