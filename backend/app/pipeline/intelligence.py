@@ -379,14 +379,31 @@ def synthesize_feature_narrative(
             parts.append(", ".join(counts))
         timeline_lines.append(" | ".join(parts))
 
-    # Bug examples (from the most recent bug versions)
+    # Mixed examples: bugs + resolutions + feature requests for Gesamtbild context
     bug_rows = [r for r in signal_rows if r.get("signal_type") in ("bug", "performance", "ux")]
-    example_lines = "\n".join(
-        f'- [v{r.get("version") or "?"}] {r["text"][:150]}'
-        for r in bug_rows[:5]
+    res_rows = [r for r in signal_rows if r.get("signal_type") == "resolution"]
+    req_rows = [r for r in signal_rows if r.get("signal_type") == "feature_request"]
+
+    def _fmt_examples(rows, limit=3):
+        return "\n".join(f'- {r["text"][:140]}' for r in rows[:limit])
+
+    signal_summary = (
+        f"Gesamt: {len(signal_rows)} Signale | "
+        f"Bugs/Perf/UX: {len(bug_rows)} | "
+        f"Behebungen: {len(res_rows)} | "
+        f"Feature-Wünsche: {len(req_rows)}"
     )
 
+    examples_block = ""
+    if bug_rows:
+        examples_block += f"Häufige Beschwerden:\n{_fmt_examples(bug_rows)}\n"
+    if res_rows:
+        examples_block += f"\nPositive Rückmeldungen:\n{_fmt_examples(res_rows)}\n"
+    if req_rows:
+        examples_block += f"\nFeature-Wünsche:\n{_fmt_examples(req_rows)}\n"
+
     context = f"""Feature: {feature}
+{signal_summary}
 Aktuellste Version im Datensatz: {latest_version or "unbekannt"}
 Erste Bug-Meldung: {f"v{first_bug_version}" if first_bug_version else "keine"}
 Letzte Bug-Meldung: {f"v{last_bug_version}" if last_bug_version else "keine"}
@@ -396,23 +413,20 @@ Behebungshinweise: {"; ".join(resolution_evidence) if resolution_evidence else "
 Versions-Timeline:
 {chr(10).join(timeline_lines) if timeline_lines else "(keine Versionsdaten)"}
 
-Beispielhafte Nutzermeldungen:
-{example_lines or "(keine)"}"""
+{examples_block.strip()}"""
 
     prompt = (
-        f"Du bist ein App-Qualitätsanalyst und analysierst das Feature '{feature}' "
-        f"einer mobilen App auf Basis von Nutzerbewertungen.\n\n"
+        f"Du analysierst das Feature '{feature}' einer mobilen App anhand von Nutzerbewertungen.\n\n"
         f"{context}\n\n"
-        "Schreibe einen präzisen Status-Bericht (2–4 Sätze) aus der Perspektive der aktuellsten Version. "
-        "Beantworte dabei:\n"
-        "1. In welchen Versionen trat das Problem auf? Wann war die letzte bekannte Meldung?\n"
-        "2. Gibt es Hinweise auf eine Behebung (Rückgang der Meldungen, Dev-Antworten, Behebungs-Signale)?\n"
-        "3. Aktueller Status: explizit 'Offen', 'Wahrscheinlich behoben' oder 'Keine aktuellen Daten'.\n\n"
-        "Regeln:\n"
-        "- Verwende immer konkrete Versionsnummern.\n"
-        "- Formuliere 'zuletzt gemeldet in vX.Y.Z' statt 'noch immer in vX.Y.Z'.\n"
-        "- Wenn keine Bug-Meldungen vorhanden sind, beschreibe stattdessen was Nutzer positiv berichten.\n"
-        "- Antwort ausschließlich auf Deutsch."
+        "Schreibe genau 3 Absätze — KEIN Titel, KEINE Nummerierung, nur Fließtext:\n\n"
+        "Absatz 1 — Gesamtbild: Fasse zusammen was Nutzer über dieses Feature berichten. "
+        "Was sind die häufigsten Beschwerden? Was funktioniert gut? Wie ist die allgemeine Stimmung? "
+        "Keine Versionsnummern in diesem Absatz.\n\n"
+        "Absatz 2 — Versionshistorie: In welchen Versionen trat das Problem auf? "
+        "Wann zuletzt gemeldet ('zuletzt in vX.Y.Z', nicht 'noch immer in')? Behebungshinweise?\n\n"
+        "Absatz 3 — Status: Genau ein Satz. Beginnt mit 'Status: Offen', 'Status: Wahrscheinlich behoben' "
+        "oder 'Status: Keine ausreichenden Daten' — gefolgt von einer kurzen Begründung.\n\n"
+        "Regeln: Nur Deutsch. Keine Markdown-Symbole. Versionsnummern nur in Absatz 2 und 3."
     )
 
     try:
