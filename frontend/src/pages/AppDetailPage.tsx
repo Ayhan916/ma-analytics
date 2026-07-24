@@ -4,7 +4,7 @@ import { AppShell } from '../components/AppShell'
 import { dashboardApi, searchApi, datasourceApi, intelligenceApi, apiClient } from '../services/api'
 import {
   ArrowLeft, Search, Sparkles, LayoutGrid, Star,
-  TrendingDown, TrendingUp, ChevronDown, X, RefreshCw, Download, Cpu,
+  TrendingDown, TrendingUp, ChevronDown, X, RefreshCw, Download, Cpu, Lightbulb,
 } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -149,21 +149,21 @@ function ClusterCard({ cluster, type }: { cluster: Cluster; type: 'issue' | 'str
   )
 }
 
-function AbsaFeatureCard({ feat, type, onSelect }: { feat: FeatureRow; type: 'issue' | 'strength'; onSelect: (f: string) => void }) {
+function AbsaFeatureCard({ feat, type, onSelect }: { feat: FeatureRow; type: 'issue' | 'request'; onSelect: (f: string) => void }) {
   const isIssue = type === 'issue'
-  const accentText   = isIssue ? 'text-red-400'       : 'text-emerald-400'
-  const accentBorder = isIssue ? 'border-red-500/20'  : 'border-emerald-500/20'
-  const accentBg     = isIssue ? 'hover:bg-red-500/5' : 'hover:bg-emerald-500/5'
+  const accentText   = isIssue ? 'text-red-400'        : 'text-violet-400'
+  const accentBorder = isIssue ? 'border-red-500/20'   : 'border-violet-500/20'
+  const accentBg     = isIssue ? 'hover:bg-red-500/5'  : 'hover:bg-violet-500/5'
 
   const bugCount  = feat.signal_types.find(s => s.signal_type === 'bug')?.count ?? 0
   const perfCount = feat.signal_types.find(s => s.signal_type === 'performance')?.count ?? 0
   const uxCount   = feat.signal_types.find(s => s.signal_type === 'ux')?.count ?? 0
-  const resCount  = feat.signal_types.find(s => s.signal_type === 'resolution')?.count ?? 0
+  const reqCount  = feat.signal_types.find(s => s.signal_type === 'feature_request')?.count ?? 0
 
-  const metricValue = isIssue ? bugCount + perfCount + uxCount : resCount
+  const metricValue = isIssue ? bugCount + perfCount + uxCount : reqCount
   const metricLabel = isIssue
     ? `${bugCount > 0 ? `${bugCount} Bug${bugCount !== 1 ? 's' : ''}` : ''}${perfCount > 0 ? `${bugCount > 0 ? ' · ' : ''}${perfCount} Perf` : ''}${uxCount > 0 ? ` · ${uxCount} UX` : ''}`
-    : `${resCount} behoben`
+    : `${reqCount} Wunsch${reqCount !== 1 ? '¨e' : ''}`
 
   return (
     <button
@@ -586,11 +586,11 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
     .filter(f => f.bugLike > 0)
     .sort((a, b) => b.bugLike - a.bugLike)
 
-  const absaStrengths = [...absaFeatures]
+  const absaRequests = [...absaFeatures]
     .filter(f => f.feature !== 'General')
-    .map(f => ({ ...f, resCount: f.signal_types.find(s => s.signal_type === 'resolution')?.count ?? 0 }))
-    .filter(f => f.resCount > 0)
-    .sort((a, b) => b.resCount - a.resCount)
+    .map(f => ({ ...f, reqCount: f.signal_types.find(s => s.signal_type === 'feature_request')?.count ?? 0 }))
+    .filter(f => f.reqCount > 0)
+    .sort((a, b) => b.reqCount - a.reqCount)
 
   return (
     <div className="space-y-8">
@@ -645,20 +645,18 @@ function OverviewTab({ datasourceId }: { datasourceId: string }) {
         </section>
         <section>
           <div className="flex items-center gap-2 mb-3">
-            <TrendingUp size={14} className="text-emerald-400" />
-            <h3 className="text-white text-sm font-semibold">Top Strengths</h3>
+            <Lightbulb size={14} className="text-violet-400" />
+            <h3 className="text-white text-sm font-semibold">Feature Requests</h3>
             {useAbsa && (
               <span className="text-[10px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 px-1.5 py-0.5 rounded-full font-medium">ABSA</span>
             )}
           </div>
           <div className="space-y-3">
             {useAbsa
-              ? absaStrengths.length === 0
-                ? <Empty text="Keine Resolution-Signale gefunden." />
-                : absaStrengths.map(f => <AbsaFeatureCard key={f.feature} feat={f} type="strength" onSelect={setSelectedFeature} />)
-              : summary.top_strengths.length === 0
-                ? <Empty text="No strengths detected." />
-                : summary.top_strengths.map(c => <ClusterCard key={c.id} cluster={c} type="strength" />)
+              ? absaRequests.length === 0
+                ? <Empty text="Keine Feature-Wünsche gefunden." />
+                : absaRequests.map(f => <AbsaFeatureCard key={f.feature} feat={f} type="request" onSelect={setSelectedFeature} />)
+              : <Empty text="Feature Requests nur mit ABSA verfügbar." />
             }
           </div>
         </section>
