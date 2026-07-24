@@ -261,12 +261,24 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
     ? pts.map((p, i) => ({ x: xOf(i), y: yOf(p.avg_rating !== null ? (p.avg_rating / 5) * 100 : 0), r: p.avg_rating }))
     : []
 
-  // Version markers — only within selected range and dedupe per month
+  // Version markers — only within selected range, dedupe per month
   const monthsInView = new Set(pts.map(p => p.month))
   const markersInView = (trend.version_markers ?? []).filter(m => monthsInView.has(m.month))
-  // dedupe: keep only first version per month to avoid overlap
   const markersByMonth = new Map<string, string>()
   markersInView.forEach(m => { if (!markersByMonth.has(m.month)) markersByMonth.set(m.month, m.version) })
+
+  // Active version per month: latest version released up to (and including) that month
+  const allMarkersSorted = [...(trend.version_markers ?? [])].sort((a, b) => a.month.localeCompare(b.month))
+  const getActiveVersion = (month: string): string | null => {
+    const released = allMarkersSorted.filter(m => m.month <= month)
+    return released.length > 0 ? released[released.length - 1].version : null
+  }
+
+  // Render stars: e.g. 3.8 → "★★★★☆"
+  const toStars = (r: number) => {
+    const full = Math.round(r)
+    return '★'.repeat(full) + '☆'.repeat(5 - full)
+  }
 
   // Trend summary
   const trendSuffix = (() => {
@@ -450,10 +462,19 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
         {/* Floating tooltip */}
         {hp !== null && hoveredIdx !== null && (
-          <div className={`absolute top-4 pointer-events-none z-10 bg-slate-800 border border-white/10 rounded-xl px-3 py-2.5 shadow-xl text-xs min-w-[152px] ${tooltipRight ? 'left-[38%]' : 'right-[12%]'}`}>
-            <p className="text-slate-300 font-semibold mb-2">
-              {MONTH_NAMES[parseInt(hp.month.split('-')[1])-1]} {hp.month.split('-')[0]}
-            </p>
+          <div className={`absolute top-4 pointer-events-none z-10 bg-slate-800 border border-white/10 rounded-xl px-3 py-2.5 shadow-xl text-xs min-w-[168px] ${tooltipRight ? 'left-[38%]' : 'right-[12%]'}`}>
+            {/* Header: Monat + aktive Version */}
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <p className="text-slate-300 font-semibold">
+                {MONTH_NAMES[parseInt(hp.month.split('-')[1])-1]} {hp.month.split('-')[0]}
+              </p>
+              {getActiveVersion(hp.month) && (
+                <span className="text-[10px] text-indigo-300 bg-indigo-500/15 border border-indigo-500/20 px-1.5 py-0.5 rounded font-mono">
+                  {getActiveVersion(hp.month)}
+                </span>
+              )}
+            </div>
+            {/* Sentiment */}
             <div className="space-y-1.5">
               <div className="flex justify-between gap-4">
                 <span className="text-emerald-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />Positiv</span>
@@ -467,18 +488,22 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
                 <span className="text-slate-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-500 shrink-0" />Neutral</span>
                 <span className="text-white font-medium">{pctOf(hp.neutral, hp.total)}%</span>
               </div>
-              {hp.avg_rating !== null && (
-                <div className="flex justify-between gap-4">
-                  <span className="text-amber-400 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />Ø Rating</span>
-                  <span className="text-white font-medium">{hp.avg_rating?.toFixed(1)} ★</span>
-                </div>
-              )}
             </div>
-            <div className="mt-2 pt-2 border-t border-white/10 flex justify-between text-slate-500">
-              <span>{hp.total.toLocaleString()} Reviews</span>
-              {markersByMonth.get(hp.month) && (
-                <span className="text-indigo-400">{markersByMonth.get(hp.month)}</span>
-              )}
+            {/* Rating */}
+            {hp.avg_rating !== null && (
+              <div className="mt-2 pt-2 border-t border-white/10">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">Ø Bewertung</span>
+                  <span className="flex items-center gap-1">
+                    <span className="text-amber-400 text-[11px] tracking-tight">{toStars(hp.avg_rating)}</span>
+                    <span className="text-slate-300 font-medium">{hp.avg_rating.toFixed(1)}</span>
+                  </span>
+                </div>
+              </div>
+            )}
+            {/* Footer */}
+            <div className="mt-2 pt-2 border-t border-white/10 text-slate-500">
+              {hp.total.toLocaleString()} Reviews
             </div>
           </div>
         )}
