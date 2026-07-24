@@ -208,6 +208,14 @@ export const intelligenceApi = {
     const { data } = await apiClient.post(`/intelligence/backfill-replies?datasource_id=${datasourceId}`)
     return data
   },
+  reclassifyGeneral: async (datasourceId: string) => {
+    const { data } = await apiClient.post(`/intelligence/reclassify-general?datasource_id=${datasourceId}`)
+    return data
+  },
+  clusterGeneral: async (datasourceId: string) => {
+    const { data } = await apiClient.post(`/intelligence/cluster-general?datasource_id=${datasourceId}`)
+    return data
+  },
   resolutionCheck: async (reviewId: string) => {
     const { data } = await apiClient.get(`/intelligence/review/${reviewId}/resolution-check`)
     return data

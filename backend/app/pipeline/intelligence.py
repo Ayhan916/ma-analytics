@@ -53,15 +53,18 @@ _FEATURE_KEYWORDS: dict[str, list[str]] = {
     "CarPlay":         ["carplay", "car play", "apple carplay"],
     "AndroidAuto":     ["android auto"],
     "Login":           ["login", "anmelden", "einloggen", "anmeldung", "passwort", "password", "pin",
-                        "registrierung", "bmw id", "bmw-id"],
+                        "registrierung", "bmw id", "bmw-id", "vw id", "vw-id", "myvolkswagen konto",
+                        "mercedes konto", "daimler konto", "me konto", "account"],
     "Updates":         ["update", "aktualisierung", "upgrade", "patch", "software"],
     "Performance":     ["absturz", "crash", "stürzt", "abstürzen", "einfriert", "eingefroren",
-                        "friert", "hängt sich", "reagiert nicht"],
+                        "friert", "hängt sich", "reagiert nicht", "lädt nicht", "öffnet nicht",
+                        "startet nicht", "bootet", "ladezeit"],
     "UI":              ["oberfläche", "benutzeroberfläche", "interface", "design", "layout", "optik",
                         "bedienung", "bedienen", "handhabung", "übersicht", "überblick",
-                        "widgets", "widget", "darstellung", "menü"],
+                        "widgets", "widget", "darstellung", "menü", "dark mode", "darkmode",
+                        "benutzerfreundlich", "intuitiv", "ui", "ux"],
     "Connectivity":    ["internet", "wlan", "wifi", "mobilfunk", "mobile daten", "verbindung",
-                        "alexa", "sprachsteuerung", "voice"],
+                        "alexa", "sprachsteuerung", "voice", "vernetzt", "vernetzung", "online"],
     "Battery":         ["akku", "batterie", "ladezustand", "energieverbrauch", "stromverbrauch"],
     "Notifications":   ["benachrichtigung", "push", "notification", "mitteilung", "meldung"],
     "Music":           ["musik", "spotify", "radio", "audio", "sound", "lautsprecher", "media"],
@@ -71,15 +74,34 @@ _FEATURE_KEYWORDS: dict[str, list[str]] = {
                         "verriegeln", "entriegeln", "türen öffnen", "türen schließen"],
     "Charging":        ["laden", "ladestation", "wallbox", "ladepunkt", "ladevorgang", "charge",
                         "ladehistorie", "ladeleistung", "ladesäule", "ladeverlauf"],
-    "Settings":        ["einstellungen", "konfiguration", "einrichten", "konfigurieren"],
+    "Settings":        ["einstellungen", "konfiguration", "einrichten", "konfigurieren", "personalisierung",
+                        "anpassung", "datenschutz", "berechtigungen"],
     "Account":         ["konto", "profil", "fahrzeug hinzufügen", "fahrzeug verbinden", "fahrzeug",
-                        "registrieren"],
+                        "registrieren", "fahrzeugzuordnung", "vin", "fahrgestellnummer"],
     "Vehicle Status":  ["tankinhalt", "tankfüllstand", "verbrauch", "reichweite", "reifendruck",
                         "kilometerstand", "tankuhr", "kraftstoff", "tank", "ölstand",
-                        "reifenluftdruck", "ladehistorie der batterie"],
-    "Digital Key":     ["digital key", "digitalkey", "schlüssel", "nfc-schlüssel", "car access"],
+                        "reifenluftdruck", "ladehistorie der batterie", "kilometerstand",
+                        "fahrzeugdaten", "fehlercode", "wartungsintervall", "inspection"],
+    "Digital Key":     ["digital key", "digitalkey", "schlüssel", "nfc-schlüssel", "car access",
+                        "schlüsselloses", "keyless"],
     "Support":         ["service", "support", "entwickler", "kundenservice", "kundendienst",
-                        "hotline", "bmw support", "bmw service"],
+                        "hotline", "bmw support", "bmw service", "vw service", "mercedes service",
+                        "daimler", "kontakt", "reaktion", "antwort"],
+    # Brand-specific companion apps
+    "App-Verbindung":  ["myvolkswagen", "my volkswagen", "we connect", "weconnect",
+                        "vw connect", "volkswagen app", "id. software", "id.software",
+                        "mercedes me", "mercedes-me", "mbux", "me app",
+                        "bmw connected", "my bmw", "mybmw",
+                        "connected drive", "connecteddrive",
+                        "opel connect", "ford pass", "fordpass", "stellantis",
+                        "porsche connect", "audi connect", "audiconnect",
+                        "fahrzeug koppeln", "app mit fahrzeug", "fahrzeug verknüpfen"],
+    "Fahrtenbuch":     ["fahrtenbuch", "fahrtenprotokoll", "logbuch", "trip", "trips",
+                        "reiseprotokoll", "routen", "fahrhistorie", "fahrtverlauf"],
+    "Parken":          ["parken", "parkplatz", "parkhaus", "parking", "stellplatz",
+                        "parkgebühr", "parklizenz", "parkticket"],
+    "Wartung":         ["wartung", "inspektion", "service fällig", "service-intervall",
+                        "hauptuntersuchung", "hu", "tüv", "werkstatt", "reparatur"],
 }
 
 
@@ -94,6 +116,25 @@ def normalize_feature(aspect_term: str) -> str:
         if feature.lower() in term:
             return feature
     return "General"
+
+
+def normalize_feature_with_fallback(aspect_term: str, full_text: str) -> str:
+    """Like normalize_feature, but if the aspect term maps to General,
+    fall back to a full-text keyword scan so that the broader context
+    of the review can still produce a specific feature label.
+
+    Example: pyABSA extracts aspect_term="App" from
+    "Die Bluetooth-Verbindung in der App ist toll."
+    → normalize_feature("App") → "General"
+    → full-text scan finds "bluetooth" → returns "Bluetooth"
+    """
+    feature = normalize_feature(aspect_term)
+    if feature != "General":
+        return feature
+    text_features = _keyword_features_from_text(full_text)
+    # Prefer the first specific feature found in the full text
+    non_general = [f for f in text_features if f != "General"]
+    return non_general[0] if non_general else "General"
 
 
 def _keyword_features_from_text(text: str) -> list[str]:

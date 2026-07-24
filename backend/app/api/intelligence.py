@@ -507,6 +507,66 @@ async def trigger_resynthesize(
     return BackfillJob(job_id=job_id, message=f"Narrative-Synthese gestartet — Job {job_id}")
 
 
+@router.post("/reclassify-general", response_model=BackfillJob)
+async def trigger_reclassify_general(
+    datasource_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-classify existing 'General' aspects using the updated keyword taxonomy.
+    Does NOT re-run pyABSA or scraping — just keyword matching on stored data.
+    Completes in seconds. Re-synthesizes narratives for affected features afterwards.
+    """
+    await _check_datasource(db, datasource_id, current_user.id)
+
+    from app.models.pipeline_job import PipelineJob, JobStatus
+    from app.pipeline.tasks import reclassify_general
+
+    job_id = str(uuid.uuid4())
+    job = PipelineJob(
+        id=job_id,
+        datasource_id=datasource_id,
+        status=JobStatus.pending,
+        progress="queued",
+    )
+    db.add(job)
+    await db.commit()
+
+    reclassify_general.delay(job_id, datasource_id)
+
+    return BackfillJob(job_id=job_id, message=f"Reklassifizierung gestartet — Job {job_id}")
+
+
+@router.post("/cluster-general", response_model=BackfillJob)
+async def trigger_cluster_general(
+    datasource_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cluster remaining 'General' aspects by semantic similarity using stored embeddings.
+    No re-scraping or re-embedding needed. Groq labels each discovered cluster.
+    HDBSCAN noise points stay as 'General'.
+    """
+    await _check_datasource(db, datasource_id, current_user.id)
+
+    from app.models.pipeline_job import PipelineJob, JobStatus
+    from app.pipeline.tasks import cluster_general_reviews
+
+    job_id = str(uuid.uuid4())
+    job = PipelineJob(
+        id=job_id,
+        datasource_id=datasource_id,
+        status=JobStatus.pending,
+        progress="queued",
+    )
+    db.add(job)
+    await db.commit()
+
+    cluster_general_reviews.delay(job_id, datasource_id)
+
+    return BackfillJob(job_id=job_id, message=f"Clustering gestartet — Job {job_id}")
+
+
 # ─── Resolution Check ─────────────────────────────────────────────────────────
 
 class ResolutionCheck(BaseModel):

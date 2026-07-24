@@ -12,7 +12,7 @@ from app.pipeline.ml import (
 )
 from app.pipeline.intelligence import (
     extract_aspects_from_reviews,
-    normalize_feature,
+    normalize_feature_with_fallback,
     classify_signal_type,
     derive_severity,
     extract_version_hint,
@@ -268,7 +268,9 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     for review, aspects in zip(reviews, all_review_aspects):
         meta = review_meta[review.id]
         for asp in aspects:
-            feature = asp.get("feature_override") or normalize_feature(asp["aspect_term"] or "")
+            feature = asp.get("feature_override") or normalize_feature_with_fallback(
+                asp["aspect_term"] or "", meta["content"]
+            )
             sentiment = asp["sentiment"]
             signal_type = classify_signal_type(sentiment, meta["content"])
             severity = derive_severity(sentiment, signal_type, meta["score"], asp["confidence"])
@@ -337,8 +339,16 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     log.info("absa_cleanup_done", datasource_id=datasource_id, run_start=str(run_start))
 
 
-def _run_narrative_synthesis(db, datasource_id: str, job_id: str | None = None):
-    """Re-generate Groq narratives for all features of a datasource."""
+def _run_narrative_synthesis(
+    db,
+    datasource_id: str,
+    job_id: str | None = None,
+    only_features: list[str] | None = None,
+):
+    """Re-generate Groq narratives for features of a datasource.
+
+    Pass only_features to restrict synthesis to a subset (e.g. after reclassification).
+    """
     from sqlalchemy import text as sql_text
 
     if not settings.GROQ_API_KEY:
@@ -348,16 +358,23 @@ def _run_narrative_synthesis(db, datasource_id: str, job_id: str | None = None):
     if job_id:
         _update_job(db, job_id, JobStatus.running, "intelligence_synthesizing_narratives")
 
+    feature_filter = ""
+    params: dict = {"ds_id": datasource_id}
+    if only_features:
+        feature_filter = "AND feature = ANY(:features)"
+        params["features"] = only_features
+
     feature_rows = db.execute(
-        sql_text("""
+        sql_text(f"""
             SELECT feature, COUNT(*) AS mention_count, AVG(severity) AS avg_severity
             FROM review_signals
             WHERE datasource_id = :ds_id
+            {feature_filter}
             GROUP BY feature
             HAVING COUNT(*) >= 5
             ORDER BY COUNT(*) DESC
         """),
-        {"ds_id": datasource_id},
+        params,
     ).fetchall()
 
     for feat_row in feature_rows:
@@ -777,6 +794,235 @@ def resynthesize_narratives(self, job_id: str, datasource_id: str):
     except Exception as exc:
         db.rollback()
         log.exception("resynthesize_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.pipeline.tasks.reclassify_general",
+    max_retries=1,
+    default_retry_delay=30,
+    time_limit=600,
+    soft_time_limit=570,
+)
+def reclassify_general(self, job_id: str, datasource_id: str):
+    """Re-classify existing 'General' aspect records using the updated keyword taxonomy.
+
+    Does NOT re-run pyABSA — only re-applies normalize_feature_with_fallback on
+    already-extracted aspect_term + the review's full text. Runs in seconds.
+    After reclassification, re-generates Groq narratives for all affected features.
+    """
+    db = SessionLocal()
+    try:
+        from sqlalchemy import text as sa_text
+
+        _update_job(db, job_id, JobStatus.running, "reclassify_loading")
+
+        # Load all General aspects with their review content in one query
+        rows = db.execute(
+            sa_text("""
+                SELECT ra.id  AS aspect_id,
+                       ra.aspect_term,
+                       r.content AS review_content
+                FROM review_aspects ra
+                JOIN reviews r ON r.id = ra.review_id
+                WHERE ra.datasource_id = :ds
+                  AND ra.feature = 'General'
+            """),
+            {"ds": datasource_id},
+        ).fetchall()
+
+        log.info("reclassify_general_start", datasource_id=datasource_id, candidates=len(rows))
+
+        if not rows:
+            _update_job(db, job_id, JobStatus.done, "reclassify_done_nothing_changed")
+            return
+
+        changed = 0
+        affected_features: set[str] = set()
+
+        for i, row in enumerate(rows):
+            new_feature = normalize_feature_with_fallback(
+                row.aspect_term or "", row.review_content or ""
+            )
+            if new_feature == "General":
+                continue
+
+            # Update ReviewAspect
+            db.execute(
+                sa_text("UPDATE review_aspects SET feature = :f WHERE id = :id"),
+                {"f": new_feature, "id": row.aspect_id},
+            )
+            # Update corresponding ReviewSignal (matched via aspect_id)
+            db.execute(
+                sa_text("UPDATE review_signals SET feature = :f WHERE aspect_id = :id"),
+                {"f": new_feature, "id": row.aspect_id},
+            )
+            affected_features.add(new_feature)
+            changed += 1
+
+            if changed % 500 == 0:
+                db.commit()
+                pct = min(int(100 * i / len(rows)), 90)
+                _update_job(db, job_id, JobStatus.running, f"reclassify_{pct}pct")
+
+        db.commit()
+        log.info("reclassify_general_done", changed=changed, affected_features=list(affected_features))
+
+        # Re-synthesize narratives only for features that were actually affected
+        if affected_features:
+            _update_job(db, job_id, JobStatus.running, "reclassify_synthesizing_narratives")
+            _run_narrative_synthesis(db, datasource_id, job_id=job_id, only_features=list(affected_features))
+
+        _update_job(db, job_id, JobStatus.done, f"reclassify_done_{changed}_updated")
+
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("reclassify_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit.")
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.exception("reclassify_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.pipeline.tasks.cluster_general_reviews",
+    max_retries=1,
+    default_retry_delay=30,
+    time_limit=900,
+    soft_time_limit=870,
+)
+def cluster_general_reviews(self, job_id: str, datasource_id: str):
+    """Cluster remaining 'General' ReviewAspect records by semantic similarity.
+
+    Uses already-stored review embeddings — no re-computation needed.
+    HDBSCAN groups semantically similar reviews; Groq labels each cluster.
+    Noise points (HDBSCAN label -1) remain 'General'.
+    """
+    import numpy as np
+    from sqlalchemy import text as sa_text
+
+    db = SessionLocal()
+    try:
+        _update_job(db, job_id, JobStatus.running, "cluster_general_loading")
+
+        rows = db.execute(sa_text("""
+            SELECT ra.id       AS aspect_id,
+                   ra.sentiment,
+                   r.content,
+                   r.embedding,
+                   r.language
+            FROM review_aspects ra
+            JOIN reviews r ON r.id = ra.review_id
+            WHERE ra.datasource_id = :ds
+              AND ra.feature = 'General'
+              AND r.embedding IS NOT NULL
+        """), {"ds": datasource_id}).fetchall()
+
+        if len(rows) < 20:
+            _update_job(db, job_id, JobStatus.done, "cluster_general_done_too_few")
+            log.info("cluster_general_too_few", n=len(rows))
+            return
+
+        log.info("cluster_general_start", n=len(rows), datasource_id=datasource_id)
+
+        import json as _json
+        def _parse_emb(e):
+            return _json.loads(e) if isinstance(e, str) else e
+
+        embeddings = np.array([_parse_emb(row.embedding) for row in rows], dtype=np.float32)
+
+        _update_job(db, job_id, JobStatus.running, "cluster_general_clustering")
+
+        # Scale min_cluster_size to data volume: ~2% of General reviews, clamped [10, 50]
+        min_cluster_size = max(10, min(50, len(rows) // 20))
+        labels = cluster_texts(embeddings, min_cluster_size=min_cluster_size)
+
+        unique_labels = sorted(set(int(l) for l in labels))
+        cluster_ids = [l for l in unique_labels if l >= 0]
+        n_noise = int((labels == -1).sum())
+        log.info("cluster_general_found", n_clusters=len(cluster_ids), n_noise=n_noise)
+
+        if not cluster_ids:
+            _update_job(db, job_id, JobStatus.done, "cluster_general_done_no_clusters")
+            return
+
+        # Detect dominant language
+        languages = [row.language for row in rows if row.language]
+        dominant_lang = max(set(languages), key=languages.count) if languages else "de"
+
+        _update_job(db, job_id, JobStatus.running, f"cluster_general_labeling_{len(cluster_ids)}_clusters")
+
+        cluster_label_map: dict[int, str] = {}
+        for cluster_id in cluster_ids:
+            cluster_rows = [rows[i] for i, l in enumerate(labels) if int(l) == cluster_id]
+            texts = [r.content[:300] for r in cluster_rows if r.content]
+
+            sentiments = [r.sentiment or "neutral" for r in cluster_rows]
+            dom_sentiment = max(set(sentiments), key=sentiments.count)
+            cluster_type = dom_sentiment  # "positive" / "negative" / "neutral"
+
+            label = get_cluster_label(
+                texts=texts,
+                cluster_type=cluster_type,
+                language=dominant_lang,
+                groq_api_key=settings.GROQ_API_KEY or "",
+                model=settings.GROQ_MODEL,
+            )
+            cluster_label_map[cluster_id] = label
+            log.info("cluster_labeled", cluster_id=cluster_id, label=label, size=len(cluster_rows))
+
+        # Apply feature updates
+        _update_job(db, job_id, JobStatus.running, "cluster_general_saving")
+        changed = 0
+        for i, row in enumerate(rows):
+            label_id = int(labels[i])
+            if label_id < 0:
+                continue  # noise stays General
+            new_feature = cluster_label_map[label_id]
+            db.execute(
+                sa_text("UPDATE review_aspects SET feature = :f WHERE id = :id"),
+                {"f": new_feature, "id": row.aspect_id},
+            )
+            db.execute(
+                sa_text("UPDATE review_signals SET feature = :f WHERE aspect_id = :id"),
+                {"f": new_feature, "id": row.aspect_id},
+            )
+            changed += 1
+            if changed % 500 == 0:
+                db.commit()
+
+        db.commit()
+        log.info("cluster_general_done", changed=changed, n_clusters=len(cluster_ids))
+
+        # Re-synthesize narratives for newly named features
+        new_features = list(set(cluster_label_map.values()))
+        if new_features:
+            _update_job(db, job_id, JobStatus.running, "cluster_general_synthesizing_narratives")
+            _run_narrative_synthesis(db, datasource_id, job_id=job_id, only_features=new_features)
+
+        _update_job(
+            db, job_id, JobStatus.done,
+            f"cluster_general_done_{changed}_updated_{len(cluster_ids)}_clusters",
+        )
+
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("cluster_general_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit.")
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.exception("cluster_general_failed", job_id=job_id, error=str(exc))
         _update_job(db, job_id, JobStatus.failed, error=str(exc))
         raise
     finally:

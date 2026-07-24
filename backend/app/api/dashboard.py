@@ -280,7 +280,7 @@ class SentimentTrendPoint(BaseModel):
     negative: int
     neutral: int
     total: int
-    avg_rating: float | None = None
+    avg_rating: Optional[float] = None
 
 
 class VersionMarker(BaseModel):

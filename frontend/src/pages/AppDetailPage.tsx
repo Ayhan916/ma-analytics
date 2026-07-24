@@ -256,9 +256,9 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
   const barW     = n > 1 ? Math.max(4, (pw / n) * 0.5) : 20
 
   // Rating line (normalized 0-5 → 0-100%)
-  const hasRating = pts.some(p => p.avg_rating !== null)
+  const hasRating = pts.some(p => p.avg_rating != null)
   const ratingPoints = hasRating
-    ? pts.map((p, i) => ({ x: xOf(i), y: yOf(p.avg_rating !== null ? (p.avg_rating / 5) * 100 : 0), r: p.avg_rating }))
+    ? pts.map((p, i) => ({ x: xOf(i), y: yOf(p.avg_rating != null ? (p.avg_rating / 5) * 100 : 0), r: p.avg_rating ?? null }))
     : []
 
   // Version markers — only within selected range, dedupe per month
@@ -276,7 +276,7 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
 
   // Render stars: e.g. 3.8 → "★★★★☆"
   const toStars = (r: number) => {
-    const full = Math.round(r)
+    const full = Math.max(0, Math.min(5, Math.round(r ?? 0)))
     return '★'.repeat(full) + '☆'.repeat(5 - full)
   }
 
@@ -490,13 +490,13 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
               </div>
             </div>
             {/* Rating */}
-            {hp.avg_rating !== null && (
+            {hp.avg_rating != null && (
               <div className="mt-2 pt-2 border-t border-white/10">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">Ø Bewertung</span>
                   <span className="flex items-center gap-1">
                     <span className="text-amber-400 text-[11px] tracking-tight">{toStars(hp.avg_rating)}</span>
-                    <span className="text-slate-300 font-medium">{hp.avg_rating.toFixed(1)}</span>
+                    <span className="text-slate-300 font-medium">{hp.avg_rating?.toFixed(1)}</span>
                   </span>
                 </div>
               </div>
@@ -998,6 +998,18 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
       {/* Developer Replies Backfill */}
       <BackfillRepliesSection datasourceId={datasourceId} />
 
+      {/* Divider */}
+      <div className="border-t border-white/[0.06]" />
+
+      {/* Reclassify General */}
+      <ReclassifyGeneralSection datasourceId={datasourceId} />
+
+      {/* Divider */}
+      <div className="border-t border-white/[0.06]" />
+
+      {/* Cluster General */}
+      <ClusterGeneralSection datasourceId={datasourceId} />
+
     </div>
   )
 }
@@ -1041,6 +1053,136 @@ function BackfillRepliesSection({ datasourceId }: { datasourceId: string }) {
           )}
           {status === 'error' && (
             <p className="text-red-400 text-xs mt-2">Fehler beim Starten des Backfills.</p>
+          )}
+        </div>
+        <button
+          onClick={start}
+          disabled={status === 'running'}
+          className="shrink-0 flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-white/10 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+        >
+          <RefreshCw size={12} className={status === 'running' ? 'animate-spin' : ''} />
+          {status === 'running' ? 'Läuft…' : 'Starten'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ClusterGeneralSection({ datasourceId }: { datasourceId: string }) {
+  const [status, setStatus]   = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [jobId, setJobId]     = useState<string | null>(null)
+  const [result, setResult]   = useState<{ changed: number; clusters: number } | null>(null)
+
+  const start = async () => {
+    setStatus('running')
+    setResult(null)
+    try {
+      const res = await intelligenceApi.clusterGeneral(datasourceId)
+      setJobId(res.job_id)
+      const poll = setInterval(async () => {
+        try {
+          const job = await apiClient.get(`/jobs/${res.job_id}`).then(r => r.data)
+          if (job.status === 'done') {
+            clearInterval(poll)
+            setStatus('done')
+            const m = (job.progress || '').match(/cluster_general_done_(\d+)_updated_(\d+)_clusters/)
+            if (m) setResult({ changed: parseInt(m[1]), clusters: parseInt(m[2]) })
+          } else if (job.status === 'failed') {
+            clearInterval(poll); setStatus('error')
+          }
+        } catch { clearInterval(poll); setStatus('error') }
+      }, 4000)
+    } catch { setStatus('error') }
+  }
+
+  return (
+    <section>
+      <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Semantisches Clustering</p>
+      <div className="bg-slate-900 border border-white/10 rounded-xl p-4 flex items-start gap-4">
+        <div className="flex-1">
+          <p className="text-white text-sm font-medium mb-1">„General" Reviews clustern</p>
+          <p className="text-slate-400 text-xs leading-relaxed">
+            Gruppiert verbleibende „General"-Einträge per HDBSCAN anhand ihrer Embeddings und
+            beschriftet jeden Cluster mit Groq. Keine Neuberechnung der Embeddings nötig.
+          </p>
+          {status === 'running' && (
+            <p className="text-indigo-400 text-xs mt-2">Läuft — Job {jobId?.slice(0, 8)}… (1–2 Min.)</p>
+          )}
+          {status === 'done' && result && (
+            <p className="text-emerald-400 text-xs mt-2">
+              Fertig — {result.changed} Reviews in {result.clusters} Cluster eingeteilt.
+            </p>
+          )}
+          {status === 'done' && !result && (
+            <p className="text-emerald-400 text-xs mt-2">Fertig.</p>
+          )}
+          {status === 'error' && (
+            <p className="text-red-400 text-xs mt-2">Fehler beim Clustering.</p>
+          )}
+        </div>
+        <button
+          onClick={start}
+          disabled={status === 'running'}
+          className="shrink-0 flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-white/10 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+        >
+          <RefreshCw size={12} className={status === 'running' ? 'animate-spin' : ''} />
+          {status === 'running' ? 'Läuft…' : 'Starten'}
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ReclassifyGeneralSection({ datasourceId }: { datasourceId: string }) {
+  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [jobId, setJobId]   = useState<string | null>(null)
+  const [changed, setChanged] = useState<number | null>(null)
+
+  const start = async () => {
+    setStatus('running')
+    setChanged(null)
+    try {
+      const res = await intelligenceApi.reclassifyGeneral(datasourceId)
+      setJobId(res.job_id)
+      const poll = setInterval(async () => {
+        try {
+          const job = await apiClient.get(`/jobs/${res.job_id}`).then(r => r.data)
+          if (job.status === 'done') {
+            clearInterval(poll)
+            setStatus('done')
+            const m = (job.progress || '').match(/reclassify_done_(\d+)/)
+            if (m) setChanged(parseInt(m[1]))
+          } else if (job.status === 'failed') {
+            clearInterval(poll)
+            setStatus('error')
+          }
+        } catch { clearInterval(poll); setStatus('error') }
+      }, 3000)
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  return (
+    <section>
+      <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Feature-Klassifizierung</p>
+      <div className="bg-slate-900 border border-white/10 rounded-xl p-4 flex items-start gap-4">
+        <div className="flex-1">
+          <p className="text-white text-sm font-medium mb-1">„General" Reviews reklassifizieren</p>
+          <p className="text-slate-400 text-xs leading-relaxed">
+            Wendet die erweiterte Keyword-Taxonomie auf alle bestehenden „General"-Einträge an —
+            ohne pyABSA neu zu starten. Dauert nur wenige Sekunden.
+          </p>
+          {status === 'running' && (
+            <p className="text-indigo-400 text-xs mt-2">Läuft — Job {jobId?.slice(0, 8)}…</p>
+          )}
+          {status === 'done' && (
+            <p className="text-emerald-400 text-xs mt-2">
+              Fertig{changed !== null ? ` — ${changed} Einträge neu klassifiziert` : ''}.
+            </p>
+          )}
+          {status === 'error' && (
+            <p className="text-red-400 text-xs mt-2">Fehler beim Starten der Reklassifizierung.</p>
           )}
         </div>
         <button
