@@ -31,6 +31,7 @@ class Review(Base):
     language: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     version_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)  # 'provided' | 'inferred' | 'unknown'
+    review_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)     # 'substantive' | 'rating_only'
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     reply_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     reply_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

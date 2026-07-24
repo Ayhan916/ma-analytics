@@ -17,6 +17,7 @@ from app.pipeline.intelligence import (
     derive_severity,
     extract_version_hint,
     synthesize_feature_narrative,
+    _keyword_features_from_text,
     _RESOLVED_RE as _RESOLVED_MARKER,
 )
 from app.models.pipeline_job import PipelineJob, JobStatus
@@ -236,6 +237,18 @@ def _infer_versions(db, datasource_id: str) -> int:
     return updated
 
 
+def _classify_review_type(content: str, sentiment: str) -> str:
+    """Rating-Only if: < 10 words AND positive sentiment AND no specific feature keyword found."""
+    if len(content.split()) >= 10:
+        return "substantive"
+    if sentiment != "positive":
+        return "substantive"
+    specific_features = [f for f in _keyword_features_from_text(content) if f != "General"]
+    if specific_features:
+        return "substantive"
+    return "rating_only"
+
+
 def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
     """ABSA-First Intelligence Pipeline.
 
@@ -252,20 +265,38 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
         log.warning("intelligence_no_reviews", datasource_id=datasource_id)
         return
 
+    # --- Step 0: Data Cleaning ---
+    _update_job(db, job_id, JobStatus.running, "data_cleaning")
+    substantive_reviews = []
+    for review in reviews:
+        rtype = _classify_review_type(review.content or "", review.sentiment or "neutral")
+        review.review_type = rtype
+        if rtype == "substantive":
+            substantive_reviews.append(review)
+    db.commit()
+    log.info("cleaning_done",
+             total=len(reviews),
+             substantive=len(substantive_reviews),
+             rating_only=len(reviews) - len(substantive_reviews))
+
+    if not substantive_reviews:
+        log.warning("no_substantive_reviews", datasource_id=datasource_id)
+        return
+
     # Snapshot review metadata before any DB ops
-    review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in reviews}
+    review_meta = {r.id: {"score": r.score, "version": r.version, "content": r.content or ""} for r in substantive_reviews}
 
     # --- Step 1: ABSA aspect extraction ---
     _update_job(db, job_id, JobStatus.running, "intelligence_absa_extracting")
-    log.info("absa_start", n_reviews=len(reviews))
+    log.info("absa_start", n_reviews=len(substantive_reviews))
 
     def _absa_progress(pct: int):
         _update_job(db, job_id, JobStatus.running, f"intelligence_absa_{pct}pct")
 
-    all_review_aspects = extract_aspects_from_reviews(reviews, batch_size=32, on_progress=_absa_progress)
+    all_review_aspects = extract_aspects_from_reviews(substantive_reviews, batch_size=32, on_progress=_absa_progress)
 
     total_aspects = 0
-    for review, aspects in zip(reviews, all_review_aspects):
+    for review, aspects in zip(substantive_reviews, all_review_aspects):
         meta = review_meta[review.id]
         for asp in aspects:
             feature = asp.get("feature_override") or normalize_feature_with_fallback(
@@ -307,9 +338,9 @@ def _run_intelligence_pipeline(db, job_id: str, datasource_id: str):
         # Commit every 200 reviews for incremental persistence
         if total_aspects > 0 and total_aspects % 200 == 0:
             db.commit()
-            pct = int(100 * reviews.index(review) / len(reviews))
+            pct = int(100 * substantive_reviews.index(review) / len(substantive_reviews))
             _update_job(db, job_id, JobStatus.running, f"intelligence_signals_{pct}pct")
-            log.info("absa_progress", aspects=total_aspects, review_idx=reviews.index(review))
+            log.info("absa_progress", aspects=total_aspects, review_idx=substantive_reviews.index(review))
 
     db.commit()
     log.info("absa_done", total_aspects=total_aspects)
