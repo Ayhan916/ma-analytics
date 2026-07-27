@@ -242,9 +242,21 @@ export const innovationApi = {
     industry?: string
     datasource_ids?: string[]
     market?: string
+    user_hypothesis?: string
   }) => {
-    const { data } = await apiClient.post(x27/innovation/generatex27, body)
+    const { data } = await apiClient.post('/innovation/generate', body)
     return data
+  },
+  listBriefs: async () => {
+    const { data } = await apiClient.get('/innovation/briefs')
+    return data
+  },
+  getBrief: async (id: string) => {
+    const { data } = await apiClient.get(`/innovation/briefs/${id}`)
+    return data
+  },
+  deleteBrief: async (id: string) => {
+    await apiClient.delete(`/innovation/briefs/${id}`)
   },
 }
 
