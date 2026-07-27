@@ -4,7 +4,7 @@ import { datasourceApi, innovationApi } from '../services/api'
 import {
   Lightbulb, Zap, Target, Users, ShieldAlert, TrendingUp,
   ChevronDown, ChevronUp, Loader2, AlertCircle, Sparkles,
-  BarChart3, Globe
+  BarChart3, Globe, MessageSquare, CheckCircle2, AlertTriangle, XCircle
 } from 'lucide-react'
 
 interface ProductFeature {
@@ -32,6 +32,8 @@ interface InnovationBrief {
   differentiation: string
   risk: string
   risk_level: string
+  hypothesis_check: string | null
+  hypothesis_alignment: string | null
   total_demand: number
   apps_analyzed: number
   sources: FeatureSignal[]
@@ -55,6 +57,14 @@ const RISK_STYLE: Record<string, string> = {
   hoch: 'text-red-400',
   mittel: 'text-amber-400',
   niedrig: 'text-emerald-400',
+}
+
+const ALIGNMENT_CONFIG: Record<string, {
+  icon: React.ElementType; color: string; bg: string; border: string; label: string
+}> = {
+  stark:   { icon: CheckCircle2,  color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', label: 'Stark validiert' },
+  mittel:  { icon: AlertTriangle, color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/20',   label: 'Teilweise validiert' },
+  schwach: { icon: XCircle,       color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-500/20',     label: 'Schwach validiert' },
 }
 
 function PriorityBadge({ priority }: { priority: string }) {
@@ -84,6 +94,7 @@ export function InnovationLabPage() {
   const [industry, setIndustry] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [market, setMarket] = useState('')
+  const [hypothesis, setHypothesis] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [brief, setBrief] = useState<InnovationBrief | null>(null)
@@ -96,6 +107,7 @@ export function InnovationLabPage() {
   }, [])
 
   const industries = [...new Set(sources.map(s => s.industry).filter(Boolean))].sort()
+  const isGuided = hypothesis.trim().length > 0
 
   const toggleId = (id: string) => {
     setSelectedIds(prev => {
@@ -111,12 +123,13 @@ export function InnovationLabPage() {
     setBrief(null)
     try {
       const body: {
-        mode: string; scope: string; industry?: string;
-        datasource_ids?: string[]; market?: string
+        mode: string; scope: string; industry?: string
+        datasource_ids?: string[]; market?: string; user_hypothesis?: string
       } = { mode, scope }
       if (scope === 'industry' && industry) body.industry = industry
       if (scope === 'datasource' && selectedIds.size > 0) body.datasource_ids = [...selectedIds]
       if (market.trim()) body.market = market.trim().toLowerCase()
+      if (hypothesis.trim()) body.user_hypothesis = hypothesis.trim()
       const result = await innovationApi.generate(body)
       setBrief(result)
     } catch (err: unknown) {
@@ -136,9 +149,8 @@ export function InnovationLabPage() {
   return (
     <AppShell>
       <div className="min-h-screen bg-slate-950">
-        {/* Header */}
         <div className="border-b border-white/[0.06] bg-gradient-to-r from-violet-950/30 via-indigo-950/20 to-slate-900/0">
-          <div className="max-w-6xl mx-auto px-6 py-8">
+          <div className="max-w-7xl mx-auto px-6 py-8">
             <div className="flex items-start gap-4">
               <div className="w-10 h-10 rounded-xl bg-violet-500/20 border border-violet-400/20 flex items-center justify-center shrink-0">
                 <Lightbulb size={20} className="text-violet-400" />
@@ -146,18 +158,17 @@ export function InnovationLabPage() {
               <div>
                 <h1 className="text-xl font-semibold text-white">Innovation Lab</h1>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  Generiere datengestützte Produktideen aus echten Nutzersignalen deiner analysierten Apps
+                  Generiere datengestützte Produktideen — frei oder mit deiner eigenen Hypothese
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="max-w-6xl mx-auto px-6 py-8 flex gap-6 items-start">
+        <div className="max-w-7xl mx-auto px-6 py-8 flex gap-6 items-start">
           {/* Config Panel */}
           <div className="w-72 shrink-0 space-y-5">
 
-            {/* Mode */}
             <div>
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Modus</p>
               <div className="grid grid-cols-1 gap-2">
@@ -192,7 +203,6 @@ export function InnovationLabPage() {
               </div>
             </div>
 
-            {/* Scope */}
             <div>
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Datenbasis</p>
               <div className="flex rounded-lg overflow-hidden border border-white/[0.06] bg-slate-800/40">
@@ -210,7 +220,6 @@ export function InnovationLabPage() {
               </div>
             </div>
 
-            {/* Industry filter */}
             {scope === 'industry' && (
               <div>
                 <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">Branche</p>
@@ -227,7 +236,6 @@ export function InnovationLabPage() {
               </div>
             )}
 
-            {/* App multi-select */}
             {scope === 'datasource' && (
               <div>
                 <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -255,7 +263,6 @@ export function InnovationLabPage() {
               </div>
             )}
 
-            {/* Market filter */}
             <div>
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
                 Markt <span className="text-slate-600 normal-case font-normal">(optional)</span>
@@ -272,7 +279,45 @@ export function InnovationLabPage() {
               </div>
             </div>
 
-            {/* Generate button */}
+            <div className="border-t border-white/[0.06]" />
+
+            {/* Hypothesis */}
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <MessageSquare size={13} className={isGuided ? 'text-indigo-400' : 'text-slate-500'} />
+                <p className={`text-[11px] font-semibold uppercase tracking-wider ${isGuided ? 'text-indigo-400' : 'text-slate-400'}`}>
+                  Deine Hypothese
+                  <span className={`ml-1 normal-case font-normal ${isGuided ? 'text-indigo-500' : 'text-slate-600'}`}>
+                    (optional)
+                  </span>
+                </p>
+              </div>
+
+              {isGuided && (
+                <div className="flex items-center gap-1.5 mb-2 px-2 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                  <span className="text-[10px] text-indigo-300 font-medium">Geführte Analyse aktiv</span>
+                </div>
+              )}
+
+              <textarea
+                value={hypothesis}
+                onChange={e => setHypothesis(e.target.value)}
+                rows={5}
+                placeholder={"z.B. Ich möchte eine App bauen, die das Bezahlen im Auto vereinfacht. Der Fokus soll auf nahtloser Integration mit Parkgebühren und Tankstellen liegen..."}
+                className={`w-full bg-slate-800/60 border rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none resize-none leading-relaxed transition-colors ${
+                  isGuided
+                    ? 'border-indigo-500/30 focus:border-indigo-400/50'
+                    : 'border-white/[0.08] focus:border-white/20'
+                }`}
+              />
+              <p className="text-[10px] text-slate-600 mt-1.5 leading-relaxed">
+                {isGuided
+                  ? 'KI validiert deine Idee gegen echte Nutzerdaten und zeigt Stärken und blinde Flecken.'
+                  : 'Leer lassen für freie Analyse. Mit Text validiert die KI deine Hypothese gegen die Daten.'}
+              </p>
+            </div>
+
             <button
               onClick={handleGenerate}
               disabled={!canGenerate}
@@ -284,6 +329,8 @@ export function InnovationLabPage() {
             >
               {loading ? (
                 <><Loader2 size={15} className="animate-spin" /> Analysiere Signale...</>
+              ) : isGuided ? (
+                <><MessageSquare size={15} /> Hypothese validieren</>
               ) : (
                 <><Sparkles size={15} /> Idee generieren</>
               )}
@@ -296,9 +343,8 @@ export function InnovationLabPage() {
             )}
           </div>
 
-          {/* Result Area */}
+          {/* Result */}
           <div className="flex-1 min-w-0">
-            {/* Error */}
             {error && (
               <div className="flex items-start gap-3 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300">
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -306,20 +352,18 @@ export function InnovationLabPage() {
               </div>
             )}
 
-            {/* Empty state */}
             {!brief && !loading && !error && (
               <div className="flex flex-col items-center justify-center py-24 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-slate-800/60 border border-white/[0.06] flex items-center justify-center mb-4">
                   <Lightbulb size={28} className="text-slate-600" />
                 </div>
                 <p className="text-slate-400 font-medium">Noch keine Idee generiert</p>
-                <p className="text-sm text-slate-600 mt-1 max-w-xs">
-                  Wähle Modus und Datenbasis, dann klicke "Idee generieren"
+                <p className="text-sm text-slate-600 mt-1 max-w-sm">
+                  Wähle links Modus und Datenbasis. Optional kannst du deine eigene Hypothese eingeben — die KI validiert sie dann gegen echte Nutzerdaten.
                 </p>
               </div>
             )}
 
-            {/* Loading skeleton */}
             {loading && (
               <div className="space-y-4 animate-pulse">
                 <div className="h-32 rounded-xl bg-slate-800/60" />
@@ -331,7 +375,6 @@ export function InnovationLabPage() {
               </div>
             )}
 
-            {/* Brief card */}
             {brief && !loading && (
               <div className="space-y-4">
                 {/* Hero */}
@@ -342,12 +385,17 @@ export function InnovationLabPage() {
                 }`}>
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded ${
                           mode === 'competitor' ? 'bg-red-500/20 text-red-400' : 'bg-violet-500/20 text-violet-400'
                         }`}>
                           {mode === 'competitor' ? 'Konkurrenzprodukt' : 'Innovationsprodukt'}
                         </span>
+                        {brief.hypothesis_check && (
+                          <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400">
+                            Geführte Analyse
+                          </span>
+                        )}
                       </div>
                       <h2 className="text-2xl font-bold text-white mt-2">{brief.product_name}</h2>
                       <p className={`text-sm mt-1 ${mode === 'competitor' ? 'text-red-300/80' : 'text-violet-300/80'}`}>
@@ -363,20 +411,29 @@ export function InnovationLabPage() {
                   </div>
                 </div>
 
+                {/* Hypothesis check */}
+                {brief.hypothesis_check && brief.hypothesis_alignment && (() => {
+                  const cfg = ALIGNMENT_CONFIG[brief.hypothesis_alignment] ?? ALIGNMENT_CONFIG['mittel']
+                  const Icon = cfg.icon
+                  return (
+                    <div className={`rounded-xl p-4 border ${cfg.bg} ${cfg.border}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Icon size={15} className={cfg.color} />
+                        <span className={`text-[11px] font-semibold uppercase tracking-wider ${cfg.color}`}>
+                          Hypothesen-Check — {cfg.label}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-200 leading-relaxed">{brief.hypothesis_check}</p>
+                    </div>
+                  )
+                })()}
+
                 {/* Info grid */}
                 <div className="grid grid-cols-2 gap-3">
-                  <InfoCard icon={Target} label="Kernproblem">
-                    {brief.core_problem}
-                  </InfoCard>
-                  <InfoCard icon={TrendingUp} label="Marktlücke">
-                    {brief.market_gap}
-                  </InfoCard>
-                  <InfoCard icon={Users} label="Zielgruppe">
-                    {brief.target_audience}
-                  </InfoCard>
-                  <InfoCard icon={Zap} label="Alleinstellungsmerkmal">
-                    {brief.differentiation}
-                  </InfoCard>
+                  <InfoCard icon={Target} label="Kernproblem">{brief.core_problem}</InfoCard>
+                  <InfoCard icon={TrendingUp} label="Marktlücke">{brief.market_gap}</InfoCard>
+                  <InfoCard icon={Users} label="Zielgruppe">{brief.target_audience}</InfoCard>
+                  <InfoCard icon={Zap} label="Alleinstellungsmerkmal">{brief.differentiation}</InfoCard>
                 </div>
 
                 {/* Features */}
@@ -403,7 +460,7 @@ export function InnovationLabPage() {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Hauptrisiko</span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${PRIORITY_STYLE[brief.risk_level] ?? PRIORITY_STYLE.mittel}`}>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${PRIORITY_STYLE[brief.risk_level] ?? PRIORITY_STYLE['mittel']}`}>
                         {brief.risk_level}
                       </span>
                     </div>

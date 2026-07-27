@@ -22,6 +22,7 @@ class InnovationRequest(BaseModel):
     industry: str | None = None
     datasource_ids: list[str] | None = None
     market: str | None = None      # country code filter
+    user_hypothesis: str | None = None  # optional strategic brief from user
 
 
 class FeatureSignal(BaseModel):
@@ -49,6 +50,8 @@ class InnovationBrief(BaseModel):
     differentiation: str
     risk: str
     risk_level: str
+    hypothesis_check: str | None = None   # only when user_hypothesis was provided
+    hypothesis_alignment: str | None = None  # "stark" | "mittel" | "schwach"
     total_demand: int
     apps_analyzed: int
     sources: list[FeatureSignal]
@@ -61,7 +64,6 @@ def _build_where(
     market: str | None,
     user_id: str,
 ) -> tuple[str, dict]:
-    """Build SQL WHERE clause and params for datasource filtering."""
     conditions = ["ds.user_id = :user_id"]
     params: dict = {"user_id": user_id}
 
@@ -86,7 +88,6 @@ async def _aggregate_signals(
     where: str,
     params: dict,
 ) -> list[dict]:
-    """Aggregate feature signals across filtered datasources."""
     sql = text(f"""
         SELECT
             rs.feature,
@@ -124,7 +125,7 @@ async def _aggregate_signals(
     ]
 
 
-def _build_prompt(mode: str, signals: list[dict], meta: dict) -> str:
+def _build_prompt(mode: str, signals: list[dict], meta: dict, user_hypothesis: str | None) -> str:
     top = signals[:20]
     signals_text = "\n".join(
         f"- {s['feature']}: {s['fr_mentions']} Feature-Wünsche, {s['total_mentions']} Gesamterwähnungen, "
@@ -135,35 +136,50 @@ def _build_prompt(mode: str, signals: list[dict], meta: dict) -> str:
 
     scope_desc = meta.get("scope_desc", "dem analysierten Markt")
 
-    if mode == "competitor":
+    if user_hypothesis:
+        # Hypothesis validation mode — guided analysis
         instruction = (
-            f"Du bist ein Produktstratege. Basierend auf diesen echten Nutzerbeschwerden und Feature-Wünschen aus {scope_desc} "
-            f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
-            f"entwickle ein konkretes Konkurrenzprodukt, das gezielt die größten Schwächen der bestehenden Apps löst.\n\n"
-            "Das Produkt soll:\n"
-            "- Die 3–5 häufigsten ungelösten Probleme als Kernfeatures haben\n"
-            "- Einen klaren Wettbewerbsvorteil gegenüber den analysierten Apps haben\n"
-            "- Realistisch umsetzbar sein\n"
+            f"Du bist ein erfahrener Produktstratege und Marktanalyst. "
+            f"Der Nutzer hat folgende Produkthypothese oder -idee:\n\n"
+            f"NUTZER-HYPOTHESE: \"{user_hypothesis}\"\n\n"
+            f"Deine Aufgabe: Validiere diese Hypothese anhand echter Nutzerdaten aus {scope_desc} "
+            f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews). "
+            f"Entwickle dann ein konkretes Produktkonzept, das die Hypothese des Nutzers mit den "
+            f"tatsächlichen Marktdaten verbindet — bestätige was funktioniert, korrigiere was nicht "
+            f"durch Daten gedeckt ist, und ergänze was der Nutzer übersehen hat.\n\n"
+            f"Modus: {'Konkurrenzprodukt (greife Schwächen bestehender Apps an)' if mode == 'competitor' else 'Innovationsprodukt (finde unbesetzte Marktlücken)'}\n"
+        )
+        hypothesis_fields = (
+            '  "hypothesis_check": "2-3 Sätze: Wie gut stimmt die Nutzerhypothese mit den Daten überein? '
+            'Was ist stark validiert, was sollte angepasst werden, welche blinden Flecken gibt es?",\n'
+            '  "hypothesis_alignment": "stark" | "mittel" | "schwach",'
         )
     else:
-        instruction = (
-            f"Du bist ein Innovationsstratege. Basierend auf diesen echten Nutzerwünschen aus {scope_desc} "
-            f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
-            f"identifiziere die größte Marktlücke und entwickle eine innovative Produktidee, "
-            f"die bisher von keinem Anbieter bedient wird.\n\n"
-            "Das Produkt soll:\n"
-            "- Einen noch unbesetzten Marktbereich adressieren\n"
-            "- Auf echter, quantifizierter Nachfrage basieren\n"
-            "- Innovativer sein als reine Feature-Kopien\n"
-        )
+        # Free analysis mode — purely data-driven
+        if mode == "competitor":
+            instruction = (
+                f"Du bist ein Produktstratege. Basierend auf diesen echten Nutzerbeschwerden und Feature-Wünschen aus {scope_desc} "
+                f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
+                f"entwickle ein konkretes Konkurrenzprodukt, das gezielt die größten Schwächen der bestehenden Apps löst.\n\n"
+                "Das Produkt soll:\n"
+                "- Die 3–5 häufigsten ungelösten Probleme als Kernfeatures haben\n"
+                "- Einen klaren Wettbewerbsvorteil gegenüber den analysierten Apps haben\n"
+                "- Realistisch umsetzbar sein\n"
+            )
+        else:
+            instruction = (
+                f"Du bist ein Innovationsstratege. Basierend auf diesen echten Nutzerwünschen aus {scope_desc} "
+                f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
+                f"identifiziere die größte Marktlücke und entwickle eine innovative Produktidee, "
+                f"die bisher von keinem Anbieter bedient wird.\n\n"
+                "Das Produkt soll:\n"
+                "- Einen noch unbesetzten Marktbereich adressieren\n"
+                "- Auf echter, quantifizierter Nachfrage basieren\n"
+                "- Innovativer sein als reine Feature-Kopien\n"
+            )
+        hypothesis_fields = ""
 
-    return f"""{instruction}
-
-NUTZERDATEN (echte Signale, sortiert nach Relevanz):
-{signals_text}
-
-Antworte AUSSCHLIESSLICH als valides JSON-Objekt mit dieser exakten Struktur:
-{{
+    json_schema = f"""{{
   "product_name": "Prägnanter Produktname (max 4 Wörter)",
   "tagline": "Ein Satz der das Alleinstellungsmerkmal beschreibt",
   "core_problem": "Das eine Kernproblem das du löst (1-2 Sätze)",
@@ -176,8 +192,16 @@ Antworte AUSSCHLIESSLICH als valides JSON-Objekt mit dieser exakten Struktur:
   "target_audience": "Wer die Hauptzielgruppe ist und warum (1 Satz)",
   "differentiation": "Konkret wie du besser bist als alle analysierten Apps (1-2 Sätze)",
   "risk": "Hauptrisiko bei der Umsetzung (1 Satz)",
-  "risk_level": "hoch" | "mittel" | "niedrig"
-}}
+  "risk_level": "hoch" | "mittel" | "niedrig"{(chr(44) + chr(10) + "  " + hypothesis_fields.strip()) if hypothesis_fields else ""}
+}}"""
+
+    return f"""{instruction}
+
+NUTZERDATEN (echte Signale, sortiert nach Relevanz):
+{signals_text}
+
+Antworte AUSSCHLIESSLICH als valides JSON-Objekt mit dieser exakten Struktur:
+{json_schema}
 
 Nur JSON, kein erklärender Text davor oder danach."""
 
@@ -191,10 +215,9 @@ def _call_groq(prompt: str) -> dict:
         model=settings.GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7,
-        max_tokens=1500,
+        max_tokens=1800,
     )
     raw = resp.choices[0].message.content.strip()
-    # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -212,7 +235,6 @@ async def generate_innovation_brief(
         body.scope, body.industry, body.datasource_ids, body.market, current_user.id
     )
 
-    # Aggregate signals
     signals = await _aggregate_signals(db, where, params)
     if not signals:
         raise HTTPException(
@@ -220,7 +242,6 @@ async def generate_innovation_brief(
             detail="Nicht genug Daten für diese Filtereinstellung. Bitte mehr Apps hinzufügen oder den Scope erweitern."
         )
 
-    # Meta stats
     meta_sql = text(f"""
         SELECT
             COUNT(DISTINCT ds.id) AS app_count,
@@ -245,8 +266,9 @@ async def generate_innovation_brief(
         "scope_desc": scope_desc,
     }
 
-    # Call Groq
-    prompt = _build_prompt(body.mode, signals, meta)
+    hypothesis = body.user_hypothesis.strip() if body.user_hypothesis and body.user_hypothesis.strip() else None
+    prompt = _build_prompt(body.mode, signals, meta, hypothesis)
+
     try:
         brief = _call_groq(prompt)
     except json.JSONDecodeError as exc:
@@ -275,6 +297,8 @@ async def generate_innovation_brief(
         differentiation=brief.get("differentiation", ""),
         risk=brief.get("risk", ""),
         risk_level=brief.get("risk_level", "mittel"),
+        hypothesis_check=brief.get("hypothesis_check") if hypothesis else None,
+        hypothesis_alignment=brief.get("hypothesis_alignment") if hypothesis else None,
         total_demand=total_demand,
         apps_analyzed=meta["apps_analyzed"],
         sources=[
