@@ -234,6 +234,20 @@ export const intelligenceApi = {
   },
 }
 
+// Innovation
+export const innovationApi = {
+  generate: async (body: {
+    mode: string
+    scope: string
+    industry?: string
+    datasource_ids?: string[]
+    market?: string
+  }) => {
+    const { data } = await apiClient.post(x27/innovation/generatex27, body)
+    return data
+  },
+}
+
 // Messages
 export const messagesApi = {
   list: async (sentiment?: string) => {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 interface NavItem { icon: React.ElementType; label: string; to: string }
@@ -11,6 +11,7 @@ const NAV: NavItem[] = [
   { icon: Search,          label: 'Search',       to: '/search' },
   { icon: Inbox,           label: 'Inbox',        to: '/inbox' },
   { icon: Kanban,          label: 'Kanban',       to: '/kanban' },
+  { icon: Lightbulb,       label: 'Innovation Lab', to: '/innovation' },
 ]
 
 function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {

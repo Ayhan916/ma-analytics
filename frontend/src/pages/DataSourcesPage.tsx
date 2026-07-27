@@ -268,7 +268,7 @@ export function DataSourcesPage() {
         count: gpCount, lang: gpLang, country: gpCountry, industry: gpIndustry,
       })
       setSuccess('DataSource created — pipeline is running in background.')
-      setGpName(''); setGpAppId('')
+      setGpName(''); setGpAppId(''); setGpCount(250000)
       await load()
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to create data source')
