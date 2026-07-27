@@ -127,84 +127,109 @@ async def _aggregate_signals(
 
 
 def _build_prompt(mode: str, signals: list, meta: dict, user_hypothesis: Optional[str]) -> str:
-    top = signals[:20]
-    signals_text = "\n".join(
-        f"- {s['feature']}: {s['fr_mentions']} Feature-Wünsche, {s['total_mentions']} Gesamterwähnungen, "
-        f"{s['app_count']} App(s) betroffen [{', '.join(s['affected_apps'][:3])}]"
-        + (f"\n  Nutzer sagen: {s['top_narrative'][:200]}" if s['top_narrative'] else "")
-        for s in top
+    scope_desc = meta.get("scope_desc", "dem analysierten Markt")
+    apps_analyzed = meta['apps_analyzed']
+    total_reviews = meta['total_reviews']
+
+    # Rich signal block — full narrative, all numbers
+    signals_text = "\n\n".join(
+        f"SIGNAL #{i+1}: \"{s['feature']}\"\n"
+        f"  Nachfrage: {s['fr_mentions']:,} Feature-Wünsche | {s['total_mentions']:,} Gesamterwähnungen\n"
+        f"  Verbreitung: {s['app_count']} App(s) — {', '.join(s['affected_apps'][:4])}\n"
+        + (f"  Was Nutzer wörtlich fordern: \"{s['top_narrative'][:400]}\"" if s['top_narrative'] else "  (kein Nutzerzitat verfügbar)")
+        for i, s in enumerate(signals[:20])
     )
 
-    scope_desc = meta.get("scope_desc", "dem analysierten Markt")
+    # Top-3 dominant signals for anchoring the concept
+    dominant = signals[:3]
+    dominant_summary = ", ".join(
+        f"\"{s['feature']}\" ({s['fr_mentions']:,} FR in {s['app_count']} Apps)"
+        for s in dominant
+    )
 
     if user_hypothesis:
-        # Hypothesis validation mode — guided analysis
-        instruction = (
-            f"Du bist ein erfahrener Produktstratege und Marktanalyst. "
-            f"Der Nutzer hat folgende Produkthypothese oder -idee:\n\n"
-            f"NUTZER-HYPOTHESE: \"{user_hypothesis}\"\n\n"
-            f"Deine Aufgabe: Validiere diese Hypothese anhand echter Nutzerdaten aus {scope_desc} "
-            f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews). "
-            f"Entwickle dann ein konkretes Produktkonzept, das die Hypothese des Nutzers mit den "
-            f"tatsächlichen Marktdaten verbindet — bestätige was funktioniert, korrigiere was nicht "
-            f"durch Daten gedeckt ist, und ergänze was der Nutzer übersehen hat.\n\n"
-            f"Modus: {'Konkurrenzprodukt (greife Schwächen bestehender Apps an)' if mode == 'competitor' else 'Innovationsprodukt (finde unbesetzte Marktlücken)'}\n"
-        )
+        mode_instruction = f"""Du bist ein Senior-Produktstratege. Der Gründer hat folgende Idee:
+
+HYPOTHESE: "{user_hypothesis}"
+
+Deine Aufgabe in zwei Schritten:
+1. VALIDIERUNG: Prüfe diese Hypothese gegen die Nutzerdaten. Wo hat der Gründer recht? Wo liegen blinde Flecken? Welche Signale widersprechen der Idee?
+2. KONZEPT: Entwickle daraus ein konkretes Produkt — behalte was die Daten bestätigen, korrigiere was sie widerlegen, ergänze was der Gründer übersehen hat.
+
+Modus: {"Konkurrenzprodukt — greife die spezifischen Schwächen der analysierten Apps an" if mode == "competitor" else "Innovationsprodukt — besetze die Marktlücke die kein bestehender Anbieter füllt"}"""
         hypothesis_fields = (
-            '  "hypothesis_check": "2-3 Sätze: Wie gut stimmt die Nutzerhypothese mit den Daten überein? '
-            'Was ist stark validiert, was sollte angepasst werden, welche blinden Flecken gibt es?",\n'
+            '"hypothesis_check": "Konkrete Einschätzung in 3-4 Sätzen: Welche Teile der Hypothese sind durch Daten stark belegt (mit Zahlen), '
+            'welche sind schwach belegt, was hat der Gründer übersehen? Sei direkt und ehrlich.",\n'
             '  "hypothesis_alignment": "stark" | "mittel" | "schwach",'
         )
     else:
-        # Free analysis mode — purely data-driven
         if mode == "competitor":
-            instruction = (
-                f"Du bist ein Produktstratege. Basierend auf diesen echten Nutzerbeschwerden und Feature-Wünschen aus {scope_desc} "
-                f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
-                f"entwickle ein konkretes Konkurrenzprodukt, das gezielt die größten Schwächen der bestehenden Apps löst.\n\n"
-                "Das Produkt soll:\n"
-                "- Die 3–5 häufigsten ungelösten Probleme als Kernfeatures haben\n"
-                "- Einen klaren Wettbewerbsvorteil gegenüber den analysierten Apps haben\n"
-                "- Realistisch umsetzbar sein\n"
-            )
+            mode_instruction = f"""Du bist ein Senior-Produktstratege mit 15 Jahren Erfahrung in Competitive Intelligence.
+
+Analysiere diese {apps_analyzed} Apps mit {total_reviews:,} Reviews aus {scope_desc}. \
+Die dominanten ungelösten Probleme sind: {dominant_summary}.
+
+Entwickle ein Konkurrenzprodukt das diese Apps vom Markt verdrängt — \
+nicht durch marginale Verbesserungen, sondern durch einen fundamentalen Ansatz der die Kernprobleme strukturell löst."""
         else:
-            instruction = (
-                f"Du bist ein Innovationsstratege. Basierend auf diesen echten Nutzerwünschen aus {scope_desc} "
-                f"({meta['apps_analyzed']} Apps, {meta['total_reviews']} Reviews) "
-                f"identifiziere die größte Marktlücke und entwickle eine innovative Produktidee, "
-                f"die bisher von keinem Anbieter bedient wird.\n\n"
-                "Das Produkt soll:\n"
-                "- Einen noch unbesetzten Marktbereich adressieren\n"
-                "- Auf echter, quantifizierter Nachfrage basieren\n"
-                "- Innovativer sein als reine Feature-Kopien\n"
-            )
+            mode_instruction = f"""Du bist ein Senior-Innovationsstratege der unbesetzte Marktlücken identifiziert.
+
+Analysiere diese {apps_analyzed} Apps mit {total_reviews:,} Reviews aus {scope_desc}. \
+Die stärksten unerfüllten Wünsche sind: {dominant_summary}.
+
+Identifiziere was KEIN bestehender Anbieter löst und entwickle ein Produkt \
+das eine neue Kategorie schafft — nicht eine bessere Version des Bestehenden."""
         hypothesis_fields = ""
 
+    coherence_rules = """
+PFLICHTREGELN FÜR DEN OUTPUT — bei Nichtbeachtung ist der Output wertlos:
+
+① ROTER FADEN: Produktname, Tagline, core_problem, market_gap, features und differentiation müssen ein einheitliches Narrativ bilden. \
+Das Kernproblem muss erklären warum die Features existieren. Der USP muss erklären warum das Kernproblem bisher ungelöst ist.
+
+② DATENBINDUNG: Jedes Feature in der Liste muss direkt aus einem Signal oben stammen — verwende die exakte Signalbezeichnung oder eine präzisierte Version davon. \
+Erfinde keine Features die nicht in den Daten sind.
+
+③ SUBSTANZ STATT FLOSKELN:
+   - core_problem: Nenne das spezifische Problem MIT Zahlen. Nicht "Nutzer haben Probleme mit X" sondern \
+"X ist das meistgenannte Problem mit N Feature-Wünschen — Nutzer beschreiben es als '...[Zitat aus Daten]...'"
+   - market_gap: Erkläre konkret warum die analysierten Apps dieses Problem NICHT lösen — was fehlt strukturell?
+   - differentiation: Keine Marketing-Phrasen. Konkret: "Während App X nur Y kann, löst dieses Produkt Z durch [spezifischen Ansatz]"
+
+④ FEATURE-PRIORISIERUNG: "hoch" nur für die 2 stärksten Signale (höchste FR-Count). \
+"mittel" für die nächsten 2-3. "niedrig" für alle weiteren."""
+
+    hypothesis_field_str = (f"\n  {hypothesis_fields}" if hypothesis_fields else "")
+
     json_schema = f"""{{
-  "product_name": "Prägnanter Produktname (max 4 Wörter)",
-  "tagline": "Ein Satz der das Alleinstellungsmerkmal beschreibt",
-  "core_problem": "Das eine Kernproblem das du löst (1-2 Sätze)",
-  "market_gap": "Warum kein bestehender Anbieter dieses Problem löst (1-2 Sätze)",
+  "product_name": "Einprägsamer Name der das Kernversprechen transportiert (2-4 Wörter, kein Generikum wie 'SmartApp')",
+  "tagline": "Ein präziser Satz: [Zielgruppe] kann endlich [konkreter Nutzen] — ohne [Hauptfrustration der Konkurrenz]",
+  "core_problem": "Das Kernproblem IN ZAHLEN: welches Signal dominiert, wie viele Nutzer betrifft es, was sagen sie wörtlich? (3-4 Sätze)",
+  "market_gap": "Warum lösen die analysierten Apps dieses Problem strukturell nicht? Was fehlt ihnen konkret? (2-3 Sätze)",
   "features": [
-    {{"name": "Feature-Name", "mentions": 1234, "priority": "hoch"}},
-    {{"name": "Feature-Name", "mentions": 567, "priority": "mittel"}},
-    {{"name": "Feature-Name", "mentions": 234, "priority": "niedrig"}}
+    {{"name": "Feature direkt aus Signal #1", "mentions": <exakte Zahl aus Daten>, "priority": "hoch"}},
+    {{"name": "Feature direkt aus Signal #2", "mentions": <exakte Zahl>, "priority": "hoch"}},
+    {{"name": "Feature aus Signal #3-4", "mentions": <exakte Zahl>, "priority": "mittel"}},
+    {{"name": "Feature aus Signal #5-6", "mentions": <exakte Zahl>, "priority": "mittel"}},
+    {{"name": "Feature aus Signal #7+", "mentions": <exakte Zahl>, "priority": "niedrig"}}
   ],
-  "target_audience": "Wer die Hauptzielgruppe ist und warum (1 Satz)",
-  "differentiation": "Konkret wie du besser bist als alle analysierten Apps (1-2 Sätze)",
-  "risk": "Hauptrisiko bei der Umsetzung (1 Satz)",
-  "risk_level": "hoch" | "mittel" | "niedrig"{(chr(44) + chr(10) + "  " + hypothesis_fields.strip()) if hypothesis_fields else ""}
+  "target_audience": "Wer leidet am stärksten unter dem Kernproblem? Konkrete Beschreibung mit Kontext (1-2 Sätze)",
+  "differentiation": "Konkret: Was können die analysierten Apps nicht, was dieses Produkt kann? Keine Phrasen. (2-3 Sätze)",
+  "risk": "Das eine Risiko das dieses Produkt scheitern lassen könnte — spezifisch, nicht generisch (1 Satz)",
+  "risk_level": "hoch" | "mittel" | "niedrig"{hypothesis_field_str}
 }}"""
 
-    return f"""{instruction}
+    return f"""{mode_instruction}
 
-NUTZERDATEN (echte Signale, sortiert nach Relevanz):
+━━━ ECHTE NUTZERSIGNALE ({apps_analyzed} Apps · {total_reviews:,} Reviews analysiert) ━━━
+
 {signals_text}
 
-Antworte AUSSCHLIESSLICH als valides JSON-Objekt mit dieser exakten Struktur:
-{json_schema}
+━━━ DEINE AUFGABE ━━━
+{coherence_rules}
 
-Nur JSON, kein erklärender Text davor oder danach."""
+Antworte AUSSCHLIESSLICH als valides JSON. Kein Text davor oder danach:
+{json_schema}"""
 
 
 def _call_groq(prompt: str) -> dict:
@@ -215,8 +240,8 @@ def _call_groq(prompt: str) -> dict:
     resp = client.chat.completions.create(
         model=settings.GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=1800,
+        temperature=0.35,
+        max_tokens=2500,
     )
     raw = resp.choices[0].message.content.strip()
     if raw.startswith("```"):
