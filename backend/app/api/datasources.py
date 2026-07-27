@@ -21,12 +21,16 @@ router = APIRouter(prefix="/datasources", tags=["datasources"])
 log = structlog.get_logger(__name__)
 
 
+VALID_INDUSTRIES = {'automotive', 'banking', 'retail', 'healthcare', 'travel', 'entertainment', 'other'}
+
+
 class CreateGPlayRequest(BaseModel):
     name: str
     app_id: str
     count: int = 500
     lang: str = "de"
     country: str = "de"
+    industry: str = "automotive"
 
     @field_validator("count")
     @classmethod
@@ -47,6 +51,7 @@ class DataSourceResponse(BaseModel):
     name: str
     type: str
     app_id: Optional[str]
+    industry: str
     job_id: Optional[str]
     job_status: Optional[str]
     job_progress: Optional[str]
@@ -98,6 +103,7 @@ async def create_google_play_source(
         name=body.name,
         app_id=body.app_id,
         type=DataSourceType.google_play,
+        industry=body.industry.strip() or 'automotive',
         scrape_lang=body.lang,
         scrape_country=body.country,
         scrape_count=body.count,
@@ -119,16 +125,18 @@ async def create_google_play_source(
     scrape_and_run.apply_async(args=[job.id, ds.id, body.app_id, body.count, body.lang, body.country], task_id=job.id)
 
     return DataSourceResponse(
-        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
+        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id, industry=ds.industry,
         job_id=job.id, job_status=job.status.value, job_error=None,
-        review_count=0, last_synced=None,
+        review_count=0, sentence_count=0, signal_count=0, last_synced=None,
         scrape_lang=ds.scrape_lang, scrape_country=ds.scrape_country, scrape_count=ds.scrape_count,
+        job_progress=None, job_started_at=None, review_date_from=None, review_date_to=None,
     )
 
 
 @router.post("/upload-csv", response_model=DataSourceResponse, status_code=201)
 async def upload_csv(
     name: str = Form(...),
+    industry: str = Form("automotive"),
     text_col: str = Form("content"),
     score_col: str = Form("score"),
     date_col: str = Form("at"),
@@ -153,6 +161,7 @@ async def upload_csv(
         user_id=current_user.id,
         name=name,
         type=DataSourceType.csv,
+        industry=industry.strip() or 'automotive',
     )
     db.add(ds)
 
@@ -192,10 +201,11 @@ async def upload_csv(
     run_pipeline.apply_async(args=[job.id, ds.id], task_id=job.id)
 
     return DataSourceResponse(
-        id=ds.id, name=ds.name, type=ds.type.value, app_id=None,
+        id=ds.id, name=ds.name, type=ds.type.value, app_id=None, industry=ds.industry,
         job_id=job.id, job_status=job.status.value, job_progress=job.progress, job_error=None,
         review_count=count, sentence_count=0, signal_count=0, last_synced=None,
         scrape_lang=None, scrape_country=None, scrape_count=None,
+        job_started_at=None, review_date_from=None, review_date_to=None,
     )
 
 
@@ -246,7 +256,7 @@ async def list_datasources(
         date_row = date_result.one()
 
         out.append(DataSourceResponse(
-            id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
+            id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id, industry=ds.industry,
             job_id=job.id if job else None,
             job_status=job.status.value if job else None,
             job_progress=job.progress if job else None,
@@ -348,10 +358,11 @@ async def fetch_all_reviews(
     review_count = count_result.scalar() or 0
 
     return DataSourceResponse(
-        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
+        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id, industry=ds.industry,
         job_id=new_job.id, job_status=new_job.status.value, job_error=None,
-        review_count=review_count, last_synced=None,
+        review_count=review_count, sentence_count=0, signal_count=0, last_synced=None,
         scrape_lang=ds.scrape_lang, scrape_country=ds.scrape_country, scrape_count=ds.scrape_count,
+        job_progress=None, job_started_at=None, review_date_from=None, review_date_to=None,
     )
 
 
@@ -410,9 +421,10 @@ async def retry_pipeline(
         log.info("retry_scrape", app_id=ds.app_id, lang=lang, country=country, count=count)
 
     return DataSourceResponse(
-        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id,
+        id=ds.id, name=ds.name, type=ds.type.value, app_id=ds.app_id, industry=ds.industry,
         job_id=new_job.id, job_status=new_job.status.value, job_error=None,
-        review_count=review_count,
+        review_count=review_count, sentence_count=0, signal_count=0,
         last_synced=ds.last_synced.isoformat() if ds.last_synced else None,
         scrape_lang=ds.scrape_lang, scrape_country=ds.scrape_country, scrape_count=ds.scrape_count,
+        job_progress=None, job_started_at=None, review_date_from=None, review_date_to=None,
     )

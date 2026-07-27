@@ -27,6 +27,8 @@ class DataSource(Base):
     last_synced: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    industry: Mapped[str] = mapped_column(String, nullable=False, default='automotive')
+
     # Scraping parameters — persisted so retry uses the same settings
     scrape_lang: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     scrape_country: Mapped[Optional[str]] = mapped_column(String, nullable=True)

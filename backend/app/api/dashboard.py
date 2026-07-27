@@ -170,6 +170,7 @@ import math
 class AppCompetitiveData(BaseModel):
     id: str
     name: str
+    country: str
     review_count: int
     avg_rating: Optional[float]
     sentiment: SentimentBreakdown
@@ -188,9 +189,26 @@ class MarketPainPoint(BaseModel):
     is_market_issue: bool
 
 
-class CompetitiveReport(BaseModel):
+INDUSTRY_LABELS: dict[str, str] = {
+    'automotive':    'Automobil',
+    'banking':       'Banking & Finanzen',
+    'retail':        'Handel & E-Commerce',
+    'healthcare':    'Gesundheit',
+    'travel':        'Reise & Transport',
+    'entertainment': 'Entertainment',
+    'other':         'Sonstige',
+}
+
+
+class IndustryGroup(BaseModel):
+    industry: str
+    industry_label: str
     apps: list[AppCompetitiveData]
     market_pain_points: list[MarketPainPoint]
+
+
+class CompetitiveReport(BaseModel):
+    groups: list[IndustryGroup]
 
 
 def _opportunity_score(negative_pct: float, mentions: int, avg_rating: Optional[float]) -> float:
@@ -216,93 +234,111 @@ async def get_competitive(
 
     from collections import defaultdict
 
-    apps: list[AppCompetitiveData] = []
-    # raw: (feature, app_name, mentions, per_app_opp_score)
-    raw_issues: list[tuple[str, str, int, float]] = []
-
+    # Group datasources by industry
+    by_industry: dict[str, list] = defaultdict(list)
     for ds in datasources:
-        review_count_result = await db.execute(
-            select(func.count()).select_from(Review).where(Review.datasource_id == ds.id)
-        )
-        review_count = review_count_result.scalar() or 0
-        if review_count == 0:
+        by_industry[ds.industry].append(ds)
+
+    groups: list[IndustryGroup] = []
+
+    for industry, industry_ds in by_industry.items():
+        apps: list[AppCompetitiveData] = []
+        raw_issues: list[tuple[str, str, int, float]] = []
+
+        for ds in industry_ds:
+            review_count_result = await db.execute(
+                select(func.count()).select_from(Review).where(Review.datasource_id == ds.id)
+            )
+            review_count = review_count_result.scalar() or 0
+            if review_count == 0:
+                continue
+
+            sentiment = await _sentiment_breakdown(db, ds.id)
+            avg_rating = await _avg_rating(db, ds.id)
+            negative_pct = round(sentiment.negative / sentiment.total * 100, 1) if sentiment.total else 0.0
+            app_opp_score = _opportunity_score(negative_pct, sentiment.negative, avg_rating)
+
+            top_signal_result = await db.execute(
+                text("""
+                    SELECT rs.feature, COUNT(*) AS mentions
+                    FROM review_signals rs
+                    WHERE rs.datasource_id = :ds_id
+                      AND rs.signal_type IN ('bug', 'performance', 'ux')
+                      AND rs.feature != 'General'
+                    GROUP BY rs.feature
+                    ORDER BY mentions DESC
+                    LIMIT 1
+                """),
+                {"ds_id": ds.id},
+            )
+            top_signal = top_signal_result.one_or_none()
+
+            apps.append(AppCompetitiveData(
+                id=ds.id,
+                name=ds.name,
+                country=ds.scrape_country or '',
+                review_count=review_count,
+                avg_rating=avg_rating,
+                sentiment=sentiment,
+                negative_pct=negative_pct,
+                opportunity_score=app_opp_score,
+                top_issue=top_signal.feature if top_signal else None,
+                top_issue_mentions=top_signal.mentions if top_signal else 0,
+            ))
+
+            issues_result = await db.execute(
+                text("""
+                    SELECT rs.feature, COUNT(*) AS mentions
+                    FROM review_signals rs
+                    WHERE rs.datasource_id = :ds_id
+                      AND rs.signal_type IN ('bug', 'performance', 'ux')
+                      AND rs.feature != 'General'
+                    GROUP BY rs.feature
+                    ORDER BY mentions DESC
+                    LIMIT 10
+                """),
+                {"ds_id": ds.id},
+            )
+            for row in issues_result.fetchall():
+                issue_opp = _opportunity_score(negative_pct, row.mentions, avg_rating)
+                raw_issues.append((row.feature, ds.name, row.mentions, issue_opp))
+
+        if not apps:
             continue
 
-        sentiment = await _sentiment_breakdown(db, ds.id)
-        avg_rating = await _avg_rating(db, ds.id)
-        negative_pct = round(sentiment.negative / sentiment.total * 100, 1) if sentiment.total else 0.0
-        app_opp_score = _opportunity_score(negative_pct, sentiment.negative, avg_rating)
+        # Aggregate pain points within this industry
+        agg: dict[str, dict] = defaultdict(lambda: {"mentions": 0, "apps": [], "scores": []})
+        for feature, app_name, mentions, score in raw_issues:
+            agg[feature]["mentions"] += mentions
+            agg[feature]["apps"].append(app_name)
+            agg[feature]["scores"].append(score)
 
-        # Top issue from review_signals (bug/performance/ux, non-General)
-        top_signal_result = await db.execute(
-            text("""
-                SELECT rs.feature, COUNT(*) AS mentions
-                FROM review_signals rs
-                WHERE rs.datasource_id = :ds_id
-                  AND rs.signal_type IN ('bug', 'performance', 'ux')
-                  AND rs.feature != 'General'
-                GROUP BY rs.feature
-                ORDER BY mentions DESC
-                LIMIT 1
-            """),
-            {"ds_id": ds.id},
-        )
-        top_signal = top_signal_result.one_or_none()
+        pain_points: list[MarketPainPoint] = []
+        for feature, data in agg.items():
+            app_count = len(data["apps"])
+            pain_points.append(MarketPainPoint(
+                label=feature,
+                affected_apps=data["apps"],
+                app_count=app_count,
+                total_mentions=data["mentions"],
+                opportunity_score=round(sum(data["scores"]) / len(data["scores"]), 1),
+                is_market_issue=app_count >= 2,
+            ))
 
-        apps.append(AppCompetitiveData(
-            id=ds.id,
-            name=ds.name,
-            review_count=review_count,
-            avg_rating=avg_rating,
-            sentiment=sentiment,
-            negative_pct=negative_pct,
-            opportunity_score=app_opp_score,
-            top_issue=top_signal.feature if top_signal else None,
-            top_issue_mentions=top_signal.mentions if top_signal else 0,
+        apps.sort(key=lambda a: a.opportunity_score, reverse=True)
+        pain_points.sort(key=lambda p: (-p.app_count, -p.total_mentions))
+
+        groups.append(IndustryGroup(
+            industry=industry,
+            industry_label=INDUSTRY_LABELS.get(industry, industry.capitalize()),
+            apps=apps,
+            market_pain_points=pain_points[:25],
         ))
 
-        # Collect raw issues per app for later aggregation
-        issues_result = await db.execute(
-            text("""
-                SELECT rs.feature, COUNT(*) AS mentions
-                FROM review_signals rs
-                WHERE rs.datasource_id = :ds_id
-                  AND rs.signal_type IN ('bug', 'performance', 'ux')
-                  AND rs.feature != 'General'
-                GROUP BY rs.feature
-                ORDER BY mentions DESC
-                LIMIT 10
-            """),
-            {"ds_id": ds.id},
-        )
-        for row in issues_result.fetchall():
-            issue_opp = _opportunity_score(negative_pct, row.mentions, avg_rating)
-            raw_issues.append((row.feature, ds.name, row.mentions, issue_opp))
+    # Automotive first, then alphabetical
+    groups.sort(key=lambda g: (0 if g.industry == 'automotive' else 1, g.industry_label))
 
-    # Aggregate raw issues across all apps into market-wide view
-    agg: dict[str, dict] = defaultdict(lambda: {"mentions": 0, "apps": [], "scores": []})
-    for feature, app_name, mentions, score in raw_issues:
-        agg[feature]["mentions"] += mentions
-        agg[feature]["apps"].append(app_name)
-        agg[feature]["scores"].append(score)
-
-    pain_points: list[MarketPainPoint] = []
-    for feature, data in agg.items():
-        app_count = len(data["apps"])
-        pain_points.append(MarketPainPoint(
-            label=feature,
-            affected_apps=data["apps"],
-            app_count=app_count,
-            total_mentions=data["mentions"],
-            opportunity_score=round(sum(data["scores"]) / len(data["scores"]), 1),
-            is_market_issue=app_count >= 2,
-        ))
-
-    apps.sort(key=lambda a: a.opportunity_score, reverse=True)
-    # Market issues first (sorted by total_mentions), then app-specific
-    pain_points.sort(key=lambda p: (-p.app_count, -p.total_mentions))
-
-    return CompetitiveReport(apps=apps, market_pain_points=pain_points[:25])
+    return CompetitiveReport(groups=groups)
 
 
 class SentimentTrendPoint(BaseModel):

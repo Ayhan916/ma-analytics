@@ -755,6 +755,7 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
   const [done, setDone]                 = useState(false)
   const [streamError, setStreamError]   = useState('')
   const [showSources, setShowSources]   = useState(false)
+  const [wartungOpen, setWartungOpen]   = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const answerRef = useRef<HTMLDivElement>(null)
 
@@ -883,15 +884,6 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
         </div>
       )}
 
-      {/* Divider */}
-      <div className="border-t border-white/[0.06]" />
-
-      {/* ABSA Feature Narratives */}
-      <FeatureNarratives datasourceId={datasourceId} />
-
-      {/* Divider */}
-      <div className="border-t border-white/[0.06]" />
-
       {/* Free question */}
       <section>
         <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-4">Ask a question</p>
@@ -923,14 +915,29 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
       {/* Divider */}
       <div className="border-t border-white/[0.06]" />
 
-      {/* Developer Replies Backfill */}
-      <BackfillRepliesSection datasourceId={datasourceId} />
+      {/* ABSA Feature Narratives */}
+      <FeatureNarratives datasourceId={datasourceId} />
 
       {/* Divider */}
       <div className="border-t border-white/[0.06]" />
 
-      {/* Reclassify General */}
-      <ReclassifyGeneralSection datasourceId={datasourceId} />
+      {/* Wartung — collapsible */}
+      <section className="px-6 py-4">
+        <button
+          onClick={() => setWartungOpen(o => !o)}
+          className="flex items-center gap-2 text-slate-500 hover:text-slate-300 text-xs font-semibold uppercase tracking-widest transition-colors w-full text-left"
+        >
+          <ChevronDown size={13} className={`transition-transform ${wartungOpen ? '' : '-rotate-90'}`} />
+          Wartung
+        </button>
+        {wartungOpen && (
+          <div className="mt-4 space-y-0 divide-y divide-white/[0.06] border border-white/[0.06] rounded-xl overflow-hidden">
+            <BackfillRepliesSection datasourceId={datasourceId} />
+            <ReclassifyGeneralSection datasourceId={datasourceId} />
+            <ReclassifySignalsSection datasourceId={datasourceId} />
+          </div>
+        )}
+      </section>
 
     </div>
   )
@@ -1057,6 +1064,72 @@ function ReclassifyGeneralSection({ datasourceId }: { datasourceId: string }) {
 }
 
 
+
+
+function ReclassifySignalsSection({ datasourceId }: { datasourceId: string }) {
+  const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [jobId, setJobId]   = useState<string | null>(null)
+  const [changed, setChanged] = useState<number | null>(null)
+
+  const start = async () => {
+    setStatus('running')
+    setChanged(null)
+    try {
+      const res = await intelligenceApi.reclassifySignals(datasourceId)
+      setJobId(res.job_id)
+      const poll = setInterval(async () => {
+        try {
+          const job = await apiClient.get(`/jobs/${res.job_id}`).then(r => r.data)
+          if (job.status === 'done') {
+            clearInterval(poll)
+            setStatus('done')
+            const m = (job.progress || '').match(/reclassify_signals_done_(\d+)/)
+            if (m) setChanged(parseInt(m[1]))
+          } else if (job.status === 'failed') {
+            clearInterval(poll)
+            setStatus('error')
+          }
+        } catch { clearInterval(poll); setStatus('error') }
+      }, 3000)
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  return (
+    <section>
+      <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">Signal-Typen</p>
+      <div className="bg-slate-900 border border-white/10 rounded-xl p-4 flex items-start gap-4">
+        <div className="flex-1">
+          <p className="text-white text-sm font-medium mb-1">Signale neu berechnen</p>
+          <p className="text-slate-400 text-xs leading-relaxed">
+            Klassifiziert alle bestehenden Signale neu (Bug, Feature-Request, Performance, UX…) —
+            nützlich nach Erweiterung der englischen Keyword-Patterns. Regeneriert danach Narratives.
+          </p>
+          {status === 'running' && (
+            <p className="text-indigo-400 text-xs mt-2">Läuft — Job {jobId?.slice(0, 8)}… (kann 1–2 Min. dauern)</p>
+          )}
+          {status === 'done' && (
+            <p className="text-emerald-400 text-xs mt-2">
+              Fertig{changed !== null ? ` — ${changed} Signale neu klassifiziert` : ''}.
+            </p>
+          )}
+          {status === 'error' && (
+            <p className="text-red-400 text-xs mt-2">Fehler beim Starten der Signal-Reklassifizierung.</p>
+          )}
+        </div>
+        <button
+          onClick={start}
+          disabled={status === 'running'}
+          className="shrink-0 flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 border border-white/10 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+        >
+          <RefreshCw size={12} className={status === 'running' ? 'animate-spin' : ''} />
+          {status === 'running' ? 'Läuft…' : 'Starten'}
+        </button>
+      </div>
+    </section>
+  )
+}
 
 
 // ─── Tab: Intelligence ───────────────────────────────────────────────────────
@@ -1251,7 +1324,7 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
   useEffect(() => {
     setLoading(true)
     setInitialError('')
-    intelligenceApi.feature(datasourceId, feature)
+    intelligenceApi.feature(datasourceId, feature, lockedSignalType ?? undefined)
       .then(setDetail)
       .catch((e: unknown) => {
         const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? 'Fehler beim Laden'
@@ -1341,8 +1414,12 @@ const toggleSort       = (s: string)  => { setSortBy(prev => prev === s ? null :
           {detail && <>
             {/* KI-Synthese — Groq-generierte Zusammenfassung aller Signale */}
             {detail.narrative && (
-              <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-xl p-4">
-                <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">KI-Synthese · Groq-Zusammenfassung aller Signale</p>
+              <div className={`border rounded-xl p-4 ${lockedSignalType === 'feature_request' ? 'bg-violet-500/5 border-violet-500/20' : 'bg-indigo-500/5 border-indigo-500/20'}`}>
+                <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">
+                  {lockedSignalType === 'feature_request'
+                    ? 'KI-Synthese · Feature-Wünsche & Potenziale'
+                    : 'KI-Synthese · Groq-Zusammenfassung aller Signale'}
+                </p>
                 <p className="text-slate-200 text-sm leading-relaxed">{detail.narrative}</p>
               </div>
             )}
@@ -2030,6 +2107,8 @@ export function AppDetailPage() {
   const [ds, setDs]           = useState<DataSource | null>(null)
   const [fetchingAll, setFetchingAll] = useState(false)
   const [fetchAllMsg, setFetchAllMsg] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
+  const prevStatusRef = useRef<string | null>(null)
 
   const refreshDs = () => {
     if (!id) return
@@ -2039,6 +2118,23 @@ export function AppDetailPage() {
   }
 
   useEffect(() => { refreshDs() }, [id])
+
+  // Poll pipeline status; auto-refresh tabs when job transitions to done
+  useEffect(() => {
+    if (!id) return
+    const poll = setInterval(() => {
+      datasourceApi.list().then((list: DataSource[]) => {
+        const found = list.find((d: DataSource) => d.id === id)
+        if (!found) return
+        setDs(found)
+        if (prevStatusRef.current === 'running' && found.job_status === 'done') {
+          setRefreshKey(k => k + 1)
+        }
+        prevStatusRef.current = found.job_status ?? null
+      }).catch(() => {})
+    }, 5000)
+    return () => clearInterval(poll)
+  }, [id])
 
   const handleFetchAll = async () => {
     if (!id || fetchingAll) return
@@ -2124,12 +2220,12 @@ export function AppDetailPage() {
 
         {/* Tab content */}
         <div className="max-w-5xl mx-auto px-6 py-8">
-          {tab === 'overview'     && <OverviewTab     datasourceId={id} onSwitchTab={setTab} />}
-          {tab === 'issues'       && <IssuesTab       datasourceId={id} />}
-          {tab === 'ideas'        && <IdeasTab        datasourceId={id} />}
-          {tab === 'reviews'      && <ReviewsTab      datasourceId={id} />}
-          {tab === 'insights'     && <InsightsTab     datasourceId={id} />}
-          {tab === 'intelligence' && <IntelligenceTab datasourceId={id} />}
+          {tab === 'overview'     && <OverviewTab     key={refreshKey} datasourceId={id} onSwitchTab={setTab} />}
+          {tab === 'issues'       && <IssuesTab       key={refreshKey} datasourceId={id} />}
+          {tab === 'ideas'        && <IdeasTab        key={refreshKey} datasourceId={id} />}
+          {tab === 'reviews'      && <ReviewsTab      key={refreshKey} datasourceId={id} />}
+          {tab === 'insights'     && <InsightsTab     key={refreshKey} datasourceId={id} />}
+          {tab === 'intelligence' && <IntelligenceTab key={refreshKey} datasourceId={id} />}
         </div>
       </div>
     </AppShell>

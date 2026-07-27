@@ -2,13 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import { datasourceApi } from '../services/api'
-import { Plus, Trash2, RefreshCw, CheckCircle, XCircle, Clock, Upload, Search, ChevronRight, Smartphone } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, CheckCircle, XCircle, Clock, Upload, ChevronRight, ChevronDown, Smartphone } from 'lucide-react'
 
 interface DataSource {
   id: string
   name: string
   type: string
   app_id: string | null
+  industry: string
+  scrape_lang: string | null
+  scrape_country: string | null
   job_id: string | null
   job_status: string | null
   job_progress: string | null
@@ -20,6 +23,64 @@ interface DataSource {
   last_synced: string | null
   review_date_from: string | null
   review_date_to: string | null
+}
+
+function countryFlag(code: string | null): string {
+  if (!code || code.length !== 2) return ''
+  return [...code.toUpperCase()].map(c => String.fromCodePoint(c.charCodeAt(0) + 127397)).join('')
+}
+
+const LANG_LABEL: Record<string, string> = { de: 'DE', en: 'EN', fr: 'FR', es: 'ES' }
+
+const INDUSTRIES = [
+  { value: 'automotive',    label: 'Automobil' },
+  { value: 'banking',       label: 'Banking & Finanzen' },
+  { value: 'retail',        label: 'Handel & E-Commerce' },
+  { value: 'healthcare',    label: 'Gesundheit' },
+  { value: 'travel',        label: 'Reise & Transport' },
+  { value: 'entertainment', label: 'Entertainment' },
+  { value: 'other',         label: 'Sonstige' },
+]
+
+const INDUSTRY_LABEL: Record<string, string> = Object.fromEntries(INDUSTRIES.map(i => [i.value, i.label]))
+
+function IndustrySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const isCustom = !INDUSTRIES.some(i => i.value === value)
+  const [dropdownVal, setDropdownVal] = useState(isCustom ? 'other' : value)
+  const [customVal, setCustomVal]     = useState(isCustom ? value : '')
+
+  const handleDropdown = (v: string) => {
+    setDropdownVal(v)
+    if (v !== 'other') { setCustomVal(''); onChange(v) }
+    else onChange(customVal.trim())
+  }
+
+  const handleCustom = (v: string) => {
+    setCustomVal(v)
+    onChange(v.trim())
+  }
+
+  return (
+    <div className="space-y-2">
+      <select
+        value={dropdownVal}
+        onChange={e => handleDropdown(e.target.value)}
+        required
+        className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500"
+      >
+        {INDUSTRIES.map(i => <option key={i.value} value={i.value}>{i.label}</option>)}
+      </select>
+      {dropdownVal === 'other' && (
+        <input
+          value={customVal}
+          onChange={e => handleCustom(e.target.value)}
+          placeholder="z.B. Logistik, Energie, SaaS..."
+          required
+          className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500 placeholder:text-slate-600"
+        />
+      )}
+    </div>
+  )
 }
 
 const PIPELINE_STEPS = [
@@ -159,17 +220,21 @@ export function DataSourcesPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [industryFilter, setIndustryFilter] = useState<string>('all')
 
   // Google Play form
   const [gpName, setGpName] = useState('')
   const [gpAppId, setGpAppId] = useState('')
-  const [gpCount, setGpCount] = useState(200)
+  const [gpCount, setGpCount] = useState(250000)
   const [gpLang, setGpLang] = useState('de')
   const [gpCountry, setGpCountry] = useState('de')
+  const [gpIndustry, setGpIndustry] = useState('automotive')
 
   // CSV form
   const [csvName, setCsvName] = useState('')
   const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [csvIndustry, setCsvIndustry] = useState('automotive')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -200,7 +265,7 @@ export function DataSourcesPage() {
     try {
       await datasourceApi.createGPlay({
         name: gpName, app_id: parseAppId(gpAppId),
-        count: gpCount, lang: gpLang, country: gpCountry,
+        count: gpCount, lang: gpLang, country: gpCountry, industry: gpIndustry,
       })
       setSuccess('DataSource created — pipeline is running in background.')
       setGpName(''); setGpAppId('')
@@ -216,6 +281,7 @@ export function DataSourcesPage() {
     setError(''); setSuccess(''); setLoading(true)
     const fd = new FormData()
     fd.append('name', csvName)
+    fd.append('industry', csvIndustry)
     fd.append('file', csvFile)
     fd.append('text_col', 'content')
     fd.append('score_col', 'score')
@@ -248,90 +314,41 @@ export function DataSourcesPage() {
     }
   }
 
+  // Build groups
+  const groupMap = new Map<string, DataSource[]>()
+  for (const ds of sources) {
+    const key = ds.app_id ?? `csv__${ds.name}`
+    if (!groupMap.has(key)) groupMap.set(key, [])
+    groupMap.get(key)!.push(ds)
+  }
+  const allGroups = [...groupMap.values()]
+
+  // Unique industries for tabs
+  const industries = Array.from(new Set(allGroups.map(g => g[0].industry).filter(Boolean)))
+
+  const groups = industryFilter === 'all'
+    ? allGroups
+    : allGroups.filter(g => g[0].industry === industryFilter)
+
+  const toggleCollapse = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      return next
+    })
+  }
+
   return (
     <AppShell>
       <div className="p-6 max-w-4xl mx-auto">
+
         <div className="mb-6">
           <h1 className="text-white text-2xl font-bold">Data Sources</h1>
           <p className="text-slate-400 text-sm mt-1">Connect your app reviews via Google Play or CSV upload</p>
         </div>
 
-        {/* Existing sources */}
-        {sources.length > 0 && (
-          <div className="mb-8">
-            <h2 className="text-slate-300 text-sm font-semibold uppercase tracking-wider mb-3">Connected Sources</h2>
-            <div className="space-y-2">
-              {sources.map(ds => {
-                const isDone = ds.job_status === 'done'
-                const card = (
-                  <div className={`bg-slate-900 border rounded-xl px-4 py-3 transition-colors
-                    ${ds.job_status === 'failed' ? 'border-red-500/30' : 'border-white/10'}
-                    ${isDone ? 'hover:border-indigo-500/40 hover:bg-slate-800/60 cursor-pointer' : ''}`}>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
-                          <Search size={14} className="text-indigo-400" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="text-white text-sm font-medium truncate">{ds.name}</p>
-                            {ds.review_date_to && (() => {
-                              const lastReview = new Date(ds.review_date_to + ' 01')
-                              const monthsAgo = (new Date().getFullYear() - lastReview.getFullYear()) * 12
-                                + (new Date().getMonth() - lastReview.getMonth())
-                              return monthsAgo > 6
-                                ? <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-400 border border-slate-600/40">Legacy</span>
-                                : <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Aktiv</span>
-                            })()}
-                          </div>
-                          <p className="text-slate-500 text-xs">
-                            {ds.app_id || 'CSV'} · {ds.review_count.toLocaleString()} Reviews
-                            {ds.review_date_from && ds.review_date_to && (
-                              <span className="text-slate-600"> · {ds.review_date_from} – {ds.review_date_to}</span>
-                            )}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <StatusBadge status={ds.job_status} />
-                        {ds.last_synced && (
-                          <span className="text-slate-500 text-xs hidden sm:block">
-                            {new Date(ds.last_synced).toLocaleDateString()}
-                          </span>
-                        )}
-                        {ds.job_status === 'failed' && (
-                          <button
-                            onClick={e => { e.preventDefault(); handleRetry(ds.id) }}
-                            className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/20 px-2 py-1 rounded-lg transition-colors"
-                          >
-                            <RefreshCw size={11} /> Retry
-                          </button>
-                        )}
-                        <button onClick={e => { e.preventDefault(); handleDelete(ds.id) }}
-                          className="text-slate-600 hover:text-red-400 transition-colors">
-                          <Trash2 size={14} />
-                        </button>
-                        {isDone && <ChevronRight size={14} className="text-slate-600" />}
-                      </div>
-                    </div>
-                    <PipelineStatusBar progress={ds.job_progress} status={ds.job_status} startedAt={ds.job_started_at} reviews={ds.review_count} />
-                    {ds.job_status === 'failed' && ds.job_error && (
-                      <div className="mt-2 ml-11 text-red-400 text-xs bg-red-500/5 border border-red-500/10 rounded-lg px-3 py-1.5">
-                        {ds.job_error}
-                      </div>
-                    )}
-                  </div>
-                )
-                return isDone
-                  ? <Link key={ds.id} to={`/datasources/${ds.id}`}>{card}</Link>
-                  : <div key={ds.id}>{card}</div>
-              })}
-            </div>
-          </div>
-        )}
-
         {/* Add new source */}
-        <div className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden">
+        <div className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden mb-8">
           <div className="flex border-b border-white/10">
             {(['gplay', 'csv'] as const).map(t => (
               <button key={t} onClick={() => setTab(t)}
@@ -349,15 +366,19 @@ export function DataSourcesPage() {
               <form onSubmit={submitGPlay} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-slate-400 text-xs mb-1">Source Name</label>
+                    <label className="block text-slate-400 text-xs mb-1">Name</label>
                     <input value={gpName} onChange={e => setGpName(e.target.value)} required placeholder="BMW Connected"
                       className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
                   </div>
                   <div>
-                    <label className="block text-slate-400 text-xs mb-1">App ID or Play Store URL</label>
+                    <label className="block text-slate-400 text-xs mb-1">App ID oder Play Store URL</label>
                     <input value={gpAppId} onChange={e => setGpAppId(e.target.value)} required placeholder="de.bmw.connected"
                       className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
                   </div>
+                </div>
+                <div>
+                  <label className="block text-slate-400 text-xs mb-1">Branche</label>
+                  <IndustrySelect value={gpIndustry} onChange={setGpIndustry} />
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
@@ -408,10 +429,16 @@ export function DataSourcesPage() {
               </form>
             ) : (
               <form onSubmit={submitCsv} className="space-y-4">
-                <div>
-                  <label className="block text-slate-400 text-xs mb-1">Source Name</label>
-                  <input value={csvName} onChange={e => setCsvName(e.target.value)} required placeholder="My Review Export"
-                    className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1">Name</label>
+                    <input value={csvName} onChange={e => setCsvName(e.target.value)} required placeholder="Mein Review Export"
+                      className="w-full bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1">Branche</label>
+                    <IndustrySelect value={csvIndustry} onChange={setCsvIndustry} />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-slate-400 text-xs mb-1">CSV File</label>
@@ -440,6 +467,199 @@ export function DataSourcesPage() {
             )}
           </div>
         </div>
+
+        {/* Connected sources */}
+        {allGroups.length > 0 && (
+          <div className="mb-8">
+
+            {/* Industry filter tabs */}
+            {industries.length > 1 && (
+              <div className="flex items-center gap-1 mb-4 flex-wrap">
+                <button
+                  onClick={() => setIndustryFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    industryFilter === 'all'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-800 text-slate-400 hover:text-white border border-white/10'
+                  }`}
+                >
+                  Alle
+                  <span className={`ml-1.5 ${industryFilter === 'all' ? 'text-indigo-300' : 'text-slate-600'}`}>
+                    {allGroups.length}
+                  </span>
+                </button>
+                {industries.map(ind => {
+                  const count = allGroups.filter(g => g[0].industry === ind).length
+                  const active = industryFilter === ind
+                  return (
+                    <button
+                      key={ind}
+                      onClick={() => setIndustryFilter(ind)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        active
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-800 text-slate-400 hover:text-white border border-white/10'
+                      }`}
+                    >
+                      {INDUSTRY_LABEL[ind] ?? ind}
+                      <span className={`ml-1.5 ${active ? 'text-indigo-300' : 'text-slate-600'}`}>{count}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            <p className="text-slate-600 text-xs font-semibold uppercase tracking-widest mb-3">
+              {industryFilter === 'all'
+                ? <>Connected Sources <span className="text-slate-700 font-normal">({groups.length})</span></>
+                : <>{INDUSTRY_LABEL[industryFilter] ?? industryFilter} <span className="text-slate-700 font-normal">({groups.length})</span></>
+              }
+            </p>
+            <div className="space-y-2">
+              {groups.map(group => {
+                const rep = group[0]
+                const groupKey = rep.app_id ?? `csv__${rep.name}`
+                const isOpen = expanded.has(groupKey)
+                const totalReviews = group.reduce((s, d) => s + d.review_count, 0)
+                const anyRunning = group.some(d => d.job_status === 'running' || d.job_status === 'pending')
+
+                return (
+                  <div key={groupKey} className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden">
+
+                    {/* ── Clickable header ── */}
+                    <button
+                      onClick={() => toggleCollapse(groupKey)}
+                      className="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-800/40 transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                          <Smartphone size={13} className="text-indigo-400" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-white text-sm font-semibold truncate">{rep.name}</p>
+                            {anyRunning && (
+                              <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse shrink-0" />
+                            )}
+                          </div>
+                          <p className="text-slate-600 text-xs truncate">
+                            {rep.app_id ?? 'CSV'} · {totalReviews.toLocaleString()} Reviews · {group.length} {group.length === 1 ? 'Locale' : 'Locales'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <span className="text-slate-700 text-xs hidden sm:block">
+                          {INDUSTRY_LABEL[rep.industry] ?? rep.industry}
+                        </span>
+                        <ChevronDown size={14} className={`text-slate-600 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                      </div>
+                    </button>
+
+                    {/* ── Locale sub-rows (collapsible) ── */}
+                    {isOpen && (
+                      <div className="border-t border-white/[0.06] divide-y divide-white/[0.06]">
+                        {group.map(ds => {
+                          const isDone = ds.job_status === 'done'
+
+                          const row = (
+                            <div className={`px-4 py-2.5 transition-colors
+                              ${ds.job_status === 'failed' ? 'bg-red-500/5' : ''}
+                              ${isDone ? 'hover:bg-slate-800/50 cursor-pointer' : ''}`}>
+                              <div className="flex items-center justify-between gap-3">
+
+                                {/* Locale info */}
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div className="w-8 flex justify-center shrink-0">
+                                    <div className="w-px h-6 bg-white/[0.07]" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      {ds.scrape_country ? (
+                                        <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-slate-200">
+                                          {countryFlag(ds.scrape_country)} {ds.scrape_country.toUpperCase()}
+                                          {ds.scrape_lang && (
+                                            <span className="text-slate-500 font-normal">
+                                              · {LANG_LABEL[ds.scrape_lang] ?? ds.scrape_lang.toUpperCase()}
+                                            </span>
+                                          )}
+                                        </span>
+                                      ) : (
+                                        <span className="text-slate-400 text-xs font-medium">CSV</span>
+                                      )}
+                                      {ds.review_date_to && (() => {
+                                        const lastReview = new Date(ds.review_date_to + ' 01')
+                                        const monthsAgo = (new Date().getFullYear() - lastReview.getFullYear()) * 12
+                                          + (new Date().getMonth() - lastReview.getMonth())
+                                        return monthsAgo > 6
+                                          ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-700/60 text-slate-500 border border-slate-600/40">Legacy</span>
+                                          : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Aktiv</span>
+                                      })()}
+                                    </div>
+                                    <p className="text-slate-600 text-xs mt-0.5">
+                                      {ds.review_count.toLocaleString()} Reviews
+                                      {ds.review_date_from && ds.review_date_to && (
+                                        <span> · {ds.review_date_from} – {ds.review_date_to}</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Right: status + actions */}
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <StatusBadge status={ds.job_status} />
+                                  {ds.last_synced && (
+                                    <span className="text-slate-600 text-xs hidden sm:block">
+                                      {new Date(ds.last_synced).toLocaleDateString()}
+                                    </span>
+                                  )}
+                                  {ds.job_status === 'failed' && (
+                                    <button
+                                      onClick={e => { e.preventDefault(); handleRetry(ds.id) }}
+                                      className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 border border-amber-400/20 px-2 py-1 rounded-lg transition-colors"
+                                    >
+                                      <RefreshCw size={11} /> Retry
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={e => { e.preventDefault(); handleDelete(ds.id) }}
+                                    className="text-slate-700 hover:text-red-400 transition-colors p-1"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                  {isDone && <ChevronRight size={13} className="text-slate-600" />}
+                                </div>
+                              </div>
+
+                              {/* Pipeline progress */}
+                              {ds.job_status !== 'done' && ds.job_status !== null && (
+                                <div className="ml-11">
+                                  <PipelineStatusBar progress={ds.job_progress} status={ds.job_status} startedAt={ds.job_started_at} reviews={ds.review_count} />
+                                </div>
+                              )}
+
+                              {/* Error */}
+                              {ds.job_status === 'failed' && ds.job_error && (
+                                <div className="mt-1.5 ml-11 text-red-400 text-xs bg-red-500/5 border border-red-500/10 rounded-lg px-3 py-1.5">
+                                  {ds.job_error}
+                                </div>
+                              )}
+                            </div>
+                          )
+
+                          return isDone
+                            ? <Link key={ds.id} to={`/datasources/${ds.id}`}>{row}</Link>
+                            : <div key={ds.id}>{row}</div>
+                        })}
+                      </div>
+                    )}
+
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
       </div>
     </AppShell>
   )

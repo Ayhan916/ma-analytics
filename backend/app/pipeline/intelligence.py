@@ -65,28 +65,44 @@ _FEATURE_KEYWORDS: dict[str, list[str]] = {
                         "benutzerfreundlich", "intuitiv", "ui", "ux"],
     "Connectivity":    ["internet", "wlan", "wifi", "mobilfunk", "mobile daten", "verbindung",
                         "alexa", "sprachsteuerung", "voice", "vernetzt", "vernetzung", "online"],
-    "Battery":         ["akku", "batterie", "ladezustand", "energieverbrauch", "stromverbrauch"],
-    "Notifications":   ["benachrichtigung", "push", "notification", "mitteilung", "meldung"],
-    "Music":           ["musik", "spotify", "radio", "audio", "sound", "lautsprecher", "media"],
-    "Phone":           ["telefon", "anruf", "freisprechen", "telefonieren", "anrufen", "kontakte"],
+    "Battery":         ["akku", "batterie", "ladezustand", "energieverbrauch", "stromverbrauch",
+                        "battery", "battery drain", "battery life", "draining battery"],
+    "Notifications":   ["benachrichtigung", "push", "notification", "mitteilung", "meldung",
+                        "alert", "alerts", "notify", "reminder"],
+    "Music":           ["musik", "spotify", "radio", "audio", "sound", "lautsprecher", "media",
+                        "music", "speaker", "volume", "stream", "streaming"],
+    "Phone":           ["telefon", "anruf", "freisprechen", "telefonieren", "anrufen", "kontakte",
+                        "phone call", "call", "hands-free", "contacts"],
     "Remote":          ["fernsteuerung", "remote", "klimaanlage", "vorklimatisierung", "vorheizen", "fernstart",
                         "standheizung", "klimatisierung", "lüftung", "fenster", "alarmanlage",
-                        "verriegeln", "entriegeln", "türen öffnen", "türen schließen"],
+                        "verriegeln", "entriegeln", "türen öffnen", "türen schließen",
+                        "remote start", "climate control", "lock", "unlock", "preheat",
+                        "pre-condition", "precondition", "horn", "lights", "remote access"],
     "Charging":        ["laden", "ladestation", "wallbox", "ladepunkt", "ladevorgang", "charge",
-                        "ladehistorie", "ladeleistung", "ladesäule", "ladeverlauf"],
+                        "ladehistorie", "ladeleistung", "ladesäule", "ladeverlauf",
+                        "charging", "charger", "charge point", "ev charging", "charging station",
+                        "charging history", "charging speed"],
     "Settings":        ["einstellungen", "konfiguration", "einrichten", "konfigurieren", "personalisierung",
-                        "anpassung", "datenschutz", "berechtigungen"],
+                        "anpassung", "datenschutz", "berechtigungen",
+                        "settings", "preferences", "configuration", "privacy", "permissions",
+                        "customize", "customization"],
     "Account":         ["konto", "profil", "fahrzeug hinzufügen", "fahrzeug verbinden", "fahrzeug",
-                        "registrieren", "fahrzeugzuordnung", "vin", "fahrgestellnummer"],
+                        "registrieren", "fahrzeugzuordnung", "vin", "fahrgestellnummer",
+                        "profile", "register", "vehicle", "add vehicle", "link vehicle"],
     "Vehicle Status":  ["tankinhalt", "tankfüllstand", "verbrauch", "reichweite", "reifendruck",
                         "kilometerstand", "tankuhr", "kraftstoff", "tank", "ölstand",
                         "reifenluftdruck", "ladehistorie der batterie", "kilometerstand",
-                        "fahrzeugdaten", "fehlercode", "wartungsintervall", "inspection"],
+                        "fahrzeugdaten", "fehlercode", "wartungsintervall", "inspection",
+                        "fuel", "fuel level", "mileage", "oil level", "tire pressure",
+                        "range", "odometer", "vehicle status", "vehicle data", "fault code"],
     "Digital Key":     ["digital key", "digitalkey", "schlüssel", "nfc-schlüssel", "car access",
-                        "schlüsselloses", "keyless"],
+                        "schlüsselloses", "keyless",
+                        "phone as key", "nfc key", "phone key", "virtual key"],
     "Support":         ["service", "support", "entwickler", "kundenservice", "kundendienst",
                         "hotline", "bmw support", "bmw service", "vw service", "mercedes service",
-                        "daimler", "kontakt", "reaktion", "antwort"],
+                        "daimler", "kontakt", "reaktion", "antwort",
+                        "customer service", "customer support", "help desk", "helpdesk",
+                        "developer", "contact", "response", "reply"],
     # Brand-specific companion apps
     "App-Verbindung":  ["myvolkswagen", "my volkswagen", "we connect", "weconnect",
                         "vw connect", "volkswagen app", "id. software", "id.software",
@@ -97,11 +113,15 @@ _FEATURE_KEYWORDS: dict[str, list[str]] = {
                         "porsche connect", "audi connect", "audiconnect",
                         "fahrzeug koppeln", "app mit fahrzeug", "fahrzeug verknüpfen"],
     "Fahrtenbuch":     ["fahrtenbuch", "fahrtenprotokoll", "logbuch", "trip", "trips",
-                        "reiseprotokoll", "routen", "fahrhistorie", "fahrtverlauf"],
+                        "reiseprotokoll", "routen", "fahrhistorie", "fahrtverlauf",
+                        "journey", "journeys", "trip history", "route history", "drive log"],
     "Parken":          ["parken", "parkplatz", "parkhaus", "parking", "stellplatz",
-                        "parkgebühr", "parklizenz", "parkticket"],
+                        "parkgebühr", "parklizenz", "parkticket",
+                        "park", "parking spot", "parking lot", "parking fee"],
     "Wartung":         ["wartung", "inspektion", "service fällig", "service-intervall",
-                        "hauptuntersuchung", "hu", "tüv", "werkstatt", "reparatur"],
+                        "hauptuntersuchung", "hu", "tüv", "werkstatt", "reparatur",
+                        "maintenance", "service due", "oil change", "inspection due",
+                        "service interval", "workshop", "repair"],
 }
 
 
@@ -154,26 +174,43 @@ def _keyword_features_from_text(text: str) -> list[str]:
 _BUG_RE = re.compile(
     r"absturz|crash|stürzt|abstürzt|einfriert|eingefroren|friert ein|"
     r"fehler|funktioniert nicht|geht nicht|verbindet nicht|öffnet nicht|"
-    r"startet nicht|hängt sich auf|reagiert nicht|spinnt|kaputt|defekt",
+    r"startet nicht|hängt sich auf|reagiert nicht|spinnt|kaputt|defekt|"
+    r"crashes|crashing|frozen|freezes|not working|doesn't work|won't open|"
+    r"won't start|won't connect|broken|fails|error|can't connect|not connecting|"
+    r"keeps crashing|stopped working|unable to|doesn't load|won't load|"
+    r"no longer works|not loading|can't login|can't log in",
     re.IGNORECASE,
 )
 _PERF_RE = re.compile(
-    r"langsam|träge|hängt|lädt.*lang|läuft.*langsam|sekunden|minuten|verzöger|buffert",
+    r"langsam|träge|hängt|lädt.*lang|läuft.*langsam|sekunden|minuten|verzöger|buffert|"
+    r"slow|sluggish|takes forever|loading.*time|lags|lag|too slow|very slow|"
+    r"takes.*minutes|takes.*seconds|freezes|hangs",
     re.IGNORECASE,
 )
 _UX_RE = re.compile(
     r"bedienung|unübersichtlich|verwirrend|schlecht.*design|umständlich|"
-    r"nicht intuitiv|schwer zu bedienen|kompliziert|schlechte ui|schlechte oberfläche",
+    r"nicht intuitiv|schwer zu bedienen|kompliziert|schlechte ui|schlechte oberfläche|"
+    r"confusing|cluttered|hard to use|not intuitive|complicated|bad design|"
+    r"poor design|poor ui|bad interface|difficult to navigate|unintuitive|"
+    r"hard to find|poorly designed|terrible design|ugly",
     re.IGNORECASE,
 )
 _REQ_RE = re.compile(
     r"sollte|wäre toll|fehlt|wünsche|vermisse|bitte.*hinzufügen|"
-    r"könnte man|wäre schön|feature.*fehlt|funktion.*fehlt|man könnte",
+    r"könnte man|wäre schön|feature.*fehlt|funktion.*fehlt|man könnte|"
+    r"please add|should add|would be nice|would be great|would love|"
+    r"wish.*had|wish.*could|missing feature|feature request|could you add|"
+    r"hope.*add|add.*option|it would be helpful|would like to see|"
+    r"would like to have|needs.*feature|want.*feature|requesting|"
+    r"add.*ability|add.*support|please.*include|really need|badly need",
     re.IGNORECASE,
 )
 _RESOLVED_RE = re.compile(
     r"nach.*update|nach dem update|jetzt klappt|klappt wieder|"
-    r"funktioniert wieder|wurde behoben|ist behoben|endlich.*klappt|fixed|behoben",
+    r"funktioniert wieder|wurde behoben|ist behoben|endlich.*klappt|fixed|behoben|"
+    r"after.*update|now works|working again|has been fixed|finally works|"
+    r"issue.*resolved|problem.*resolved|sorted|works now|back to normal|"
+    r"great update|good update|latest update.*fixed",
     re.IGNORECASE,
 )
 _VERSION_RE = re.compile(r"\b(\d+\.\d+(?:\.\d+)*)\b")
@@ -326,19 +363,73 @@ def _get_key_pool(groq_api_key: str) -> list[dict]:
 
 def _rate_limited_call(fn, groq_api_key: str):
     pool = _get_key_pool(groq_api_key)
-    with _groq_pool_lock:
-        entry = min(pool, key=lambda e: e["last_call"])
-    with entry["lock"]:
-        wait = _GROQ_MIN_INTERVAL - (time.time() - entry["last_call"])
-        if wait > 0:
-            time.sleep(wait)
-        entry["last_call"] = time.time()
-    return fn(entry["key"])
+    tried: set = set()
+    while len(tried) < len(pool):
+        with _groq_pool_lock:
+            candidates = [e for e in pool if e["key"] not in tried]
+            if not candidates:
+                break
+            entry = min(candidates, key=lambda e: e["last_call"])
+        with entry["lock"]:
+            wait = _GROQ_MIN_INTERVAL - (time.time() - entry["last_call"])
+            if wait > 0:
+                time.sleep(wait)
+            entry["last_call"] = time.time()
+        try:
+            return fn(entry["key"])
+        except Exception as exc:
+            msg = str(exc)
+            if "429" in msg and ("per day" in msg or "TPD" in msg or "tokens per day" in msg.lower()):
+                log.warning("groq_key_tpd_exhausted_switching", key_suffix=entry["key"][-6:])
+                tried.add(entry["key"])
+                continue
+            raise
+    raise RuntimeError("All Groq API keys exhausted (TPD limit reached on all keys)")
 
 
 def _semver_key(v: str) -> tuple:
     parts = re.findall(r"\d+", v)
     return tuple(int(p) for p in parts[:4]) + (0,) * (4 - len(parts[:4]))
+
+
+def synthesize_feature_request_narrative(
+    feature: str,
+    req_rows: list[dict],
+    groq_api_key: str,
+    model: str = "llama-3.3-70b-versatile",
+) -> Optional[str]:
+    """Generate an opportunity-focused narrative from feature_request signals only."""
+    if not req_rows or not groq_api_key:
+        return None
+
+    examples = "\n".join(f'- {r["text"][:160]}' for r in req_rows[:25])
+    prompt = (
+        f"Du analysierst Feature-Wünsche von Nutzern für das Feature '{feature}' einer mobilen App.\n\n"
+        f"Anzahl Wünsche: {len(req_rows)}\n\n"
+        f"Beispiele aus Nutzerbewertungen:\n{examples}\n\n"
+        "Schreibe genau 2 Absätze — KEIN Titel, KEINE Nummerierung, nur Fließtext:\n\n"
+        "Absatz 1 — Was wünschen sich Nutzer: Welche konkreten Funktionen oder Verbesserungen werden am häufigsten "
+        "gewünscht? Was fehlt den Nutzern? Benenne die wichtigsten 2–3 Wünsche mit Beispielen.\n\n"
+        "Absatz 2 — Potenzial: Welchen Mehrwert würden diese Features bringen? "
+        "Wie hoch ist die Nachfrage (hoch/mittel/gering)? Ein abschließender Satz beginnt mit "
+        "'Potenzial: Hoch', 'Potenzial: Mittel' oder 'Potenzial: Gering' — mit kurzer Begründung.\n\n"
+        "Regeln: Nur Deutsch. Keine Markdown-Symbole. Positiver, konstruktiver Ton — keine Beschwerden."
+    )
+
+    try:
+        def _call(key):
+            from groq import Groq
+            return Groq(api_key=key).chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.3,
+            )
+        response = _rate_limited_call(_call, groq_api_key)
+        return response.choices[0].message.content.strip()
+    except Exception as exc:
+        log.warning("feature_request_narrative_failed", feature=feature, error=str(exc)[:200])
+        return None
 
 
 def synthesize_feature_narrative(

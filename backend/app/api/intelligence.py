@@ -226,7 +226,7 @@ async def get_feature_detail(
 
     # Narrative
     narr = await db.execute(
-        text("SELECT narrative, mention_count, avg_severity FROM feature_narratives WHERE datasource_id = :ds_id AND feature = :feat"),
+        text("SELECT narrative, feature_request_narrative, mention_count, avg_severity FROM feature_narratives WHERE datasource_id = :ds_id AND feature = :feat"),
         {"ds_id": datasource_id, "feat": feature},
     )
     narr_row = narr.one_or_none()
@@ -366,10 +366,17 @@ async def get_feature_detail(
     total = sum(st.count for st in signal_types)
     avg_sev = narr_row.avg_severity if narr_row else None
 
+    chosen_narrative = None
+    if narr_row:
+        if signal_type_filter == "feature_request" and narr_row.feature_request_narrative:
+            chosen_narrative = narr_row.feature_request_narrative
+        else:
+            chosen_narrative = narr_row.narrative
+
     return FeatureDetail(
         feature=feature,
         datasource_id=datasource_id,
-        narrative=narr_row.narrative if narr_row else None,
+        narrative=chosen_narrative,
         mention_count=narr_row.mention_count if narr_row else total,
         avg_severity=round(float(avg_sev), 2) if avg_sev else None,
         signal_types=signal_types,
@@ -570,6 +577,33 @@ async def trigger_reclassify_general(
     reclassify_general.delay(job_id, datasource_id)
 
     return BackfillJob(job_id=job_id, message=f"Reklassifizierung gestartet — Job {job_id}")
+
+
+@router.post("/reclassify-signals", response_model=BackfillJob)
+async def trigger_reclassify_signals(
+    datasource_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-run signal type classification on all existing signals using updated keyword patterns."""
+    await _check_datasource(db, datasource_id, current_user.id)
+
+    from app.models.pipeline_job import PipelineJob, JobStatus
+    from app.pipeline.tasks import reclassify_signals
+
+    job_id = str(uuid.uuid4())
+    job = PipelineJob(
+        id=job_id,
+        datasource_id=datasource_id,
+        status=JobStatus.pending,
+        progress="queued",
+    )
+    db.add(job)
+    await db.commit()
+
+    reclassify_signals.delay(job_id, datasource_id)
+
+    return BackfillJob(job_id=job_id, message=f"Signal-Reklassifizierung gestartet — Job {job_id}")
 
 
 @router.post("/cluster-general", response_model=BackfillJob)

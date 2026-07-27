@@ -83,7 +83,7 @@ export const datasourceApi = {
     const { data } = await apiClient.get('/datasources')
     return data
   },
-  createGPlay: async (payload: { name: string; app_id: string; count: number; lang: string; country: string }) => {
+  createGPlay: async (payload: { name: string; app_id: string; count: number; lang: string; country: string; industry: string }) => {
     const { data } = await apiClient.post('/datasources/google-play', payload)
     return data
   },
@@ -214,6 +214,10 @@ export const intelligenceApi = {
   },
   reclassifyGeneral: async (datasourceId: string) => {
     const { data } = await apiClient.post(`/intelligence/reclassify-general?datasource_id=${datasourceId}`)
+    return data
+  },
+  reclassifySignals: async (datasourceId: string) => {
+    const { data } = await apiClient.post(`/intelligence/reclassify-signals?datasource_id=${datasourceId}`)
     return data
   },
   clusterGeneral: async (datasourceId: string) => {

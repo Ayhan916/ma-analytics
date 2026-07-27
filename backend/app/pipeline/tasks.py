@@ -17,6 +17,7 @@ from app.pipeline.intelligence import (
     derive_severity,
     extract_version_hint,
     synthesize_feature_narrative,
+    synthesize_feature_request_narrative,
     _keyword_features_from_text,
     _RESOLVED_RE as _RESOLVED_MARKER,
 )
@@ -436,12 +437,39 @@ def _run_narrative_synthesis(
         if not narrative:
             narrative = f"{feat_row.mention_count} Nutzermeldungen zu {feature}."
 
+        fr_signal_data = db.execute(
+            sql_text("""
+                SELECT asp.span_text AS text, rs.version_hint, rev.version, rev.reviewed_at
+                FROM review_signals rs
+                LEFT JOIN review_aspects asp ON rs.aspect_id = asp.id
+                JOIN reviews rev ON rs.review_id = rev.id
+                WHERE rs.datasource_id = :ds_id AND rs.feature = :feature
+                  AND rs.signal_type = 'feature_request'
+                ORDER BY rev.reviewed_at DESC NULLS LAST
+                LIMIT 50
+            """),
+            {"ds_id": datasource_id, "feature": feature},
+        ).fetchall()
+        req_rows_for_llm = [
+            {"text": r.text or feature, "version": r.version_hint or r.version}
+            for r in fr_signal_data
+        ]
+        fr_narrative = None
+        if len(req_rows_for_llm) >= 3:
+            fr_narrative = synthesize_feature_request_narrative(
+                feature=feature,
+                req_rows=req_rows_for_llm,
+                groq_api_key=settings.GROQ_API_KEY,
+                model=settings.GROQ_MODEL,
+            )
+
         existing = db.query(FeatureNarrative).filter(
             FeatureNarrative.datasource_id == datasource_id,
             FeatureNarrative.feature == feature,
         ).first()
         if existing:
             existing.narrative = narrative
+            existing.feature_request_narrative = fr_narrative
             existing.mention_count = feat_row.mention_count
             existing.avg_severity = float(feat_row.avg_severity) if feat_row.avg_severity else None
             existing.generated_at = datetime.now(timezone.utc)
@@ -451,6 +479,7 @@ def _run_narrative_synthesis(
                 datasource_id=datasource_id,
                 feature=feature,
                 narrative=narrative,
+                feature_request_narrative=fr_narrative,
                 mention_count=feat_row.mention_count,
                 avg_severity=float(feat_row.avg_severity) if feat_row.avg_severity else None,
                 signal_counts=None,
@@ -921,6 +950,83 @@ def reclassify_general(self, job_id: str, datasource_id: str):
     except Exception as exc:
         db.rollback()
         log.exception("reclassify_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.pipeline.tasks.reclassify_signals",
+    max_retries=1,
+    default_retry_delay=30,
+    time_limit=600,
+    soft_time_limit=570,
+)
+def reclassify_signals(self, job_id: str, datasource_id: str):
+    """Re-run classify_signal_type on all existing signals using updated keyword patterns.
+
+    Does NOT re-run pyABSA or scraping. Updates signal_type in-place.
+    Afterwards re-synthesizes narratives for all affected features.
+    """
+    db = SessionLocal()
+    try:
+        from sqlalchemy import text as sa_text
+
+        _update_job(db, job_id, JobStatus.running, "reclassify_signals_loading")
+
+        rows = db.execute(
+            sa_text("""
+                SELECT rs.id AS signal_id,
+                       rs.signal_type AS old_type,
+                       ra.sentiment,
+                       r.content
+                FROM review_signals rs
+                JOIN reviews r ON r.id = rs.review_id
+                LEFT JOIN review_aspects ra ON ra.id = rs.aspect_id
+                WHERE rs.datasource_id = :ds
+            """),
+            {"ds": datasource_id},
+        ).fetchall()
+
+        log.info("reclassify_signals_start", datasource_id=datasource_id, total=len(rows))
+
+        changed = 0
+        affected_features: set[str] = set()
+
+        for i, row in enumerate(rows):
+            if not row.sentiment or not row.content:
+                continue
+            new_type = classify_signal_type(row.sentiment, row.content)
+            if new_type == row.old_type:
+                continue
+            db.execute(
+                sa_text("UPDATE review_signals SET signal_type = :t WHERE id = :id"),
+                {"t": new_type, "id": row.signal_id},
+            )
+            changed += 1
+            if changed % 500 == 0:
+                db.commit()
+                pct = min(int(100 * i / len(rows)), 90)
+                _update_job(db, job_id, JobStatus.running, f"reclassify_signals_{pct}pct")
+
+        db.commit()
+        log.info("reclassify_signals_done", changed=changed)
+
+        if changed > 0:
+            _update_job(db, job_id, JobStatus.running, "reclassify_signals_synthesizing")
+            _run_narrative_synthesis(db, datasource_id, job_id=job_id)
+
+        _update_job(db, job_id, JobStatus.done, f"reclassify_signals_done_{changed}_updated")
+
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit.")
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.exception("reclassify_signals_failed", job_id=job_id, error=str(exc))
         _update_job(db, job_id, JobStatus.failed, error=str(exc))
         raise
     finally:

@@ -85,6 +85,7 @@ class FeatureNarrative(Base):
     datasource_id: Mapped[str] = mapped_column(String, ForeignKey("datasources.id", ondelete="CASCADE"), nullable=False)
     feature: Mapped[str] = mapped_column(String(100), nullable=False)
     narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    feature_request_narrative: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     mention_count: Mapped[int] = mapped_column(Integer, default=0)
     avg_severity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     signal_counts: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
