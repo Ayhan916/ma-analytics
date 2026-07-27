@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import { dashboardApi } from '../services/api'
-import { TrendingDown, Target, RefreshCw, ChevronRight, AlertTriangle } from 'lucide-react'
+import { TrendingDown, Target, RefreshCw, ChevronRight, AlertTriangle, Globe } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -22,10 +22,11 @@ interface AppData {
 
 interface PainPoint {
   label: string
-  app_name: string
-  datasource_id: string
-  mentions: number
+  affected_apps: string[]
+  app_count: number
+  total_mentions: number
   opportunity_score: number
+  is_market_issue: boolean
 }
 
 interface Report { apps: AppData[]; market_pain_points: PainPoint[] }
@@ -68,7 +69,7 @@ function OpportunityBadge({ score, max }: { score: number; max: number }) {
   const color = pct > 0.7 ? 'text-red-400 bg-red-400/10 border-red-400/20'
               : pct > 0.4 ? 'text-amber-400 bg-amber-400/10 border-amber-400/20'
               :              'text-slate-400 bg-slate-400/10 border-slate-400/20'
-  const label = pct > 0.7 ? 'High' : pct > 0.4 ? 'Medium' : 'Low'
+  const label = pct > 0.7 ? 'Hoch' : pct > 0.4 ? 'Mittel' : 'Niedrig'
   return (
     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${color}`}>
       {label}
@@ -80,13 +81,13 @@ function EmptyState() {
   return (
     <div className="bg-slate-900 border border-white/10 rounded-2xl p-12 text-center">
       <Target size={36} className="text-slate-700 mx-auto mb-4" />
-      <p className="text-white text-sm font-medium mb-1">No competitor data yet</p>
+      <p className="text-white text-sm font-medium mb-1">Noch keine Wettbewerbsdaten</p>
       <p className="text-slate-500 text-sm mb-4">
-        Add competitor apps in Data Sources to start your competitive analysis.
+        Füge Wettbewerber-Apps unter Datenquellen hinzu, um die Analyse zu starten.
       </p>
       <Link to="/datasources"
         className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-        Add first competitor
+        Ersten Wettbewerber hinzufügen
       </Link>
     </div>
   )
@@ -99,8 +100,8 @@ function CompetitiveRanking({ apps, maxScore }: { apps: AppData[]; maxScore: num
     <section>
       <div className="flex items-center gap-2 mb-4">
         <TrendingDown size={15} className="text-red-400" />
-        <h2 className="text-white text-sm font-semibold">Competitive Ranking</h2>
-        <span className="text-slate-500 text-xs">— sorted by market opportunity</span>
+        <h2 className="text-white text-sm font-semibold">Wettbewerbsranking</h2>
+        <span className="text-slate-500 text-xs">— sortiert nach Marktchance</span>
       </div>
 
       <div className="space-y-2">
@@ -108,38 +109,32 @@ function CompetitiveRanking({ apps, maxScore }: { apps: AppData[]; maxScore: num
           <Link key={app.id} to={`/datasources/${app.id}`}
             className="flex items-center gap-4 bg-slate-900 border border-white/10 hover:border-indigo-500/40 hover:bg-slate-800/60 rounded-xl px-4 py-3.5 transition-all group">
 
-            {/* Rank */}
             <span className="text-slate-600 text-sm font-mono w-5 shrink-0">#{i + 1}</span>
 
-            {/* App name + top issue */}
             <div className="flex-1 min-w-0">
               <p className="text-white text-sm font-medium group-hover:text-indigo-300 transition-colors">
                 {app.name}
               </p>
               {app.top_issue && (
                 <p className="text-slate-500 text-xs mt-0.5 truncate">
-                  Top issue: {app.top_issue}
+                  Häufigstes Problem: {app.top_issue}
                 </p>
               )}
             </div>
 
-            {/* Stars */}
             <div className="shrink-0 hidden sm:block">
               <RatingStars rating={app.avg_rating} />
             </div>
 
-            {/* Sentiment bar */}
             <div className="w-24 shrink-0 hidden md:block">
               <SentimentBar s={app.sentiment} />
             </div>
 
-            {/* Reviews */}
             <div className="text-right shrink-0 hidden sm:block">
               <p className="text-white text-sm font-medium">{app.review_count.toLocaleString()}</p>
-              <p className="text-slate-500 text-xs">reviews</p>
+              <p className="text-slate-500 text-xs">Bewertungen</p>
             </div>
 
-            {/* Opportunity badge */}
             <OpportunityBadge score={app.opportunity_score} max={maxScore} />
 
             <ChevronRight size={14} className="text-slate-600 group-hover:text-indigo-400 transition-colors shrink-0" />
@@ -152,48 +147,93 @@ function CompetitiveRanking({ apps, maxScore }: { apps: AppData[]; maxScore: num
 
 // ─── Section 2: Market Pain Points ───────────────────────────────────────────
 
+function PainPointTable({
+  points,
+  maxScore,
+  borderClass,
+}: {
+  points: PainPoint[]
+  maxScore: number
+  borderClass: string
+}) {
+  return (
+    <div className={`bg-slate-900 border ${borderClass} rounded-xl overflow-hidden`}>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-white/[0.06]">
+            <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Problem</th>
+            <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden sm:table-cell">Betroffene Apps</th>
+            <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Erwähnungen</th>
+            <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden md:table-cell">Chance</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/[0.04]">
+          {points.map((p, i) => (
+            <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+              <td className="px-4 py-3">
+                <span className="text-white font-medium">{p.label}</span>
+              </td>
+              <td className="px-4 py-3 hidden sm:table-cell">
+                <div className="flex flex-wrap gap-1">
+                  {p.affected_apps.map(app => (
+                    <span key={app} className="text-slate-400 text-xs bg-slate-800 px-2 py-0.5 rounded-full">{app}</span>
+                  ))}
+                </div>
+              </td>
+              <td className="px-4 py-3 text-right">
+                <span className="text-red-400 font-semibold">{p.total_mentions.toLocaleString()}</span>
+                <div className="text-slate-500 text-[10px]">{p.app_count} App{p.app_count !== 1 ? 's' : ''}</div>
+              </td>
+              <td className="px-4 py-3 text-right hidden md:table-cell">
+                <OpportunityBadge score={p.opportunity_score} max={maxScore} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function MarketPainPoints({ points, maxScore }: { points: PainPoint[]; maxScore: number }) {
+  const branchenProbleme = points.filter(p => p.is_market_issue)
+  const appSpezifisch    = points.filter(p => !p.is_market_issue)
+
   return (
     <section>
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-1">
         <AlertTriangle size={15} className="text-amber-400" />
-        <h2 className="text-white text-sm font-semibold">Market Pain Points</h2>
-        <span className="text-slate-500 text-xs">— top issues across all competitors</span>
+        <h2 className="text-white text-sm font-semibold">Markt-Schmerzpunkte</h2>
+        <span className="text-slate-500 text-xs">— branchenweite Probleme der Automobilbranche</span>
       </div>
 
-      <div className="bg-slate-900 border border-white/10 rounded-xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-white/[0.06]">
-              <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Issue</th>
-              <th className="text-left text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden sm:table-cell">Competitor</th>
-              <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3">Mentions</th>
-              <th className="text-right text-slate-500 text-xs font-medium uppercase tracking-wider px-4 py-3 hidden md:table-cell">Opportunity</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/[0.04]">
-            {points.map((p, i) => (
-              <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                <td className="px-4 py-3">
-                  <Link to={`/datasources/${p.datasource_id}`}
-                    className="text-white hover:text-indigo-300 transition-colors font-medium">
-                    {p.label}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 hidden sm:table-cell">
-                  <span className="text-slate-400 text-xs bg-slate-800 px-2 py-0.5 rounded-full">{p.app_name}</span>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <span className="text-red-400 font-semibold">{p.mentions}</span>
-                </td>
-                <td className="px-4 py-3 text-right hidden md:table-cell">
-                  <OpportunityBadge score={p.opportunity_score} max={maxScore} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mb-3 flex items-center gap-2">
+        <Globe size={12} className="text-slate-600" />
+        <span className="text-slate-600 text-xs">
+          Aggregiert über alle {new Set(points.flatMap(p => p.affected_apps)).size} Apps ·&nbsp;
+          <span className="text-amber-400/80">{branchenProbleme.length} Branchenprobleme</span>
+          &nbsp;·&nbsp;
+          <span className="text-slate-500">{appSpezifisch.length} App-spezifisch</span>
+        </span>
       </div>
+
+      {branchenProbleme.length > 0 && (
+        <div className="mb-4">
+          <p className="text-slate-500 text-[10px] font-medium uppercase tracking-widest mb-2">
+            Branchenprobleme · in ≥ 2 Apps
+          </p>
+          <PainPointTable points={branchenProbleme} maxScore={maxScore} borderClass="border-amber-500/20" />
+        </div>
+      )}
+
+      {appSpezifisch.length > 0 && (
+        <div>
+          <p className="text-slate-500 text-[10px] font-medium uppercase tracking-widest mb-2">
+            App-spezifische Schwächen · nur in 1 App
+          </p>
+          <PainPointTable points={appSpezifisch} maxScore={maxScore} borderClass="border-white/10" />
+        </div>
+      )}
     </section>
   )
 }
@@ -205,8 +245,8 @@ function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: numb
     <section>
       <div className="flex items-center gap-2 mb-4">
         <Target size={15} className="text-indigo-400" />
-        <h2 className="text-white text-sm font-semibold">Opportunity Score</h2>
-        <span className="text-slate-500 text-xs">— where to attack first</span>
+        <h2 className="text-white text-sm font-semibold">Chancen-Score</h2>
+        <span className="text-slate-500 text-xs">— wo zuerst angreifen</span>
       </div>
 
       <div className="space-y-3">
@@ -221,7 +261,7 @@ function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: numb
                   {app.name}
                 </span>
                 <div className="flex items-center gap-2">
-                  <span className="text-slate-400 text-xs">{app.negative_pct}% negative</span>
+                  <span className="text-slate-400 text-xs">{app.negative_pct}% negativ</span>
                   <span className="text-white text-sm font-bold">{app.opportunity_score.toLocaleString()}</span>
                 </div>
               </div>
@@ -231,7 +271,7 @@ function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: numb
               {app.top_issue && (
                 <p className="text-slate-500 text-xs mt-2">
                   <TrendingDown size={10} className="inline mr-1 text-red-400" />
-                  {app.top_issue} ({app.top_issue_mentions} mentions)
+                  {app.top_issue} ({app.top_issue_mentions} Erwähnungen)
                 </p>
               )}
             </Link>
@@ -241,9 +281,9 @@ function OpportunityScores({ apps, maxScore }: { apps: AppData[]; maxScore: numb
 
       <div className="mt-4 bg-slate-900/50 border border-white/[0.06] rounded-xl p-4">
         <p className="text-slate-500 text-xs leading-relaxed">
-          <span className="text-slate-300 font-medium">How it's calculated: </span>
-          Opportunity Score combines negative sentiment rate × volume of complaints × rating gap from maximum.
-          Higher score = more unhappy users + more mentions + lower rating = bigger market gap to exploit.
+          <span className="text-slate-300 font-medium">Berechnung: </span>
+          Der Chancen-Score kombiniert Negativbewertungsrate × Anzahl der Beschwerden × Bewertungslücke zum Maximum.
+          Höherer Score = mehr unzufriedene Nutzer + mehr Erwähnungen + schlechtere Bewertung = größere Marktlücke.
         </p>
       </div>
     </section>
@@ -264,7 +304,7 @@ export function DashboardPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const maxAppScore   = report ? Math.max(...report.apps.map(a => a.opportunity_score), 1)           : 1
+  const maxAppScore   = report ? Math.max(...report.apps.map(a => a.opportunity_score), 1)                   : 1
   const maxPointScore = report ? Math.max(...report.market_pain_points.map(p => p.opportunity_score), 1) : 1
 
   return (
@@ -273,9 +313,9 @@ export function DashboardPage() {
 
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-white text-2xl font-bold">Competitive Intelligence</h1>
+          <h1 className="text-white text-2xl font-bold">Wettbewerbsanalyse</h1>
           <p className="text-slate-400 text-sm mt-1">
-            Identify where competitors are failing — and where you can win.
+            Wo Wettbewerber scheitern — und wo du gewinnen kannst.
           </p>
         </div>
 

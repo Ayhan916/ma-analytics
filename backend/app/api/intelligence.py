@@ -1,6 +1,7 @@
 """Intelligence API — Feature Matrix, Signal Explorer, Narratives."""
 from __future__ import annotations
 import uuid
+from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -213,6 +214,10 @@ async def get_feature_detail(
     signal_type_filter: Optional[str] = None,
     version_filter: Optional[str] = None,
     sort_by: Optional[str] = None,  # datum_neu | datum_alt | version | bewertung | severity
+    date_from: Optional[str] = None,    # YYYY-MM-DD
+    date_to: Optional[str] = None,      # YYYY-MM-DD
+    version_from: Optional[str] = None, # version string range start
+    version_to: Optional[str] = None,   # version string range end
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -269,8 +274,8 @@ async def get_feature_detail(
         for r in vt.fetchall()
     ]
 
-    # Top signals — with optional signal_type, version filters and sort
-    is_filtered = bool(signal_type_filter or version_filter or sort_by)
+    # Top signals — with optional signal_type, version, date filters and sort
+    is_filtered = bool(signal_type_filter or version_filter or sort_by or date_from or date_to or version_from or version_to)
     row_limit = 100 if is_filtered else 30
     extra_where = ""
     params: dict = {"ds_id": datasource_id, "feat": feature}
@@ -280,6 +285,36 @@ async def get_feature_detail(
     if version_filter:
         extra_where += " AND COALESCE(rs.version_hint, rev.version) = :ver"
         params["ver"] = version_filter
+    if date_from:
+        extra_where += " AND rev.reviewed_at >= :date_from"
+        params["date_from"] = date_type.fromisoformat(date_from)
+    if date_to:
+        extra_where += " AND rev.reviewed_at <= :date_to"
+        params["date_to"] = date_type.fromisoformat(date_to)
+    if version_from or version_to:
+        # Fetch versions ordered chronologically by first appearance
+        ver_order_res = await db.execute(
+            text("""
+                SELECT COALESCE(rs2.version_hint, rev2.version) AS ver
+                FROM review_signals rs2
+                JOIN reviews rev2 ON rs2.review_id = rev2.id
+                WHERE rs2.datasource_id = :ds_id AND rs2.feature = :feat
+                  AND COALESCE(rs2.version_hint, rev2.version) IS NOT NULL
+                GROUP BY 1
+                ORDER BY MIN(rev2.reviewed_at) ASC
+            """),
+            {"ds_id": datasource_id, "feat": feature},
+        )
+        ordered_versions = [r.ver for r in ver_order_res.fetchall()]
+        from_idx = ordered_versions.index(version_from) if version_from and version_from in ordered_versions else 0
+        to_idx = ordered_versions.index(version_to) if version_to and version_to in ordered_versions else len(ordered_versions) - 1
+        lo, hi = min(from_idx, to_idx), max(from_idx, to_idx)
+        selected_versions = ordered_versions[lo : hi + 1]
+        if selected_versions:
+            placeholders = ", ".join(f":vr_{i}" for i in range(len(selected_versions)))
+            extra_where += f" AND COALESCE(rs.version_hint, rev.version) IN ({placeholders})"
+            for i, v in enumerate(selected_versions):
+                params[f"vr_{i}"] = v
 
     order_clause = {
         "datum_neu":  "rev.reviewed_at DESC NULLS LAST",

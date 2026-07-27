@@ -188,11 +188,15 @@ export const intelligenceApi = {
     const { data } = await apiClient.get(`/intelligence/matrix?datasource_id=${datasourceId}`)
     return data
   },
-  feature: async (datasourceId: string, feature: string, signalTypeFilter?: string, versionFilter?: string, sortBy?: string) => {
+  feature: async (datasourceId: string, feature: string, signalTypeFilter?: string, versionFilter?: string, sortBy?: string, dateFrom?: string, dateTo?: string, versionFrom?: string, versionTo?: string) => {
     const p = new URLSearchParams({ datasource_id: datasourceId, feature })
     if (signalTypeFilter) p.set('signal_type_filter', signalTypeFilter)
     if (versionFilter) p.set('version_filter', versionFilter)
     if (sortBy) p.set('sort_by', sortBy)
+    if (dateFrom) p.set('date_from', dateFrom)
+    if (dateTo) p.set('date_to', dateTo)
+    if (versionFrom) p.set('version_from', versionFrom)
+    if (versionTo) p.set('version_to', versionTo)
     const { data } = await apiClient.get(`/intelligence/feature?${p}`)
     return data
   },

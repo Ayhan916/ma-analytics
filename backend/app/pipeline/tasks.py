@@ -238,10 +238,8 @@ def _infer_versions(db, datasource_id: str) -> int:
 
 
 def _classify_review_type(content: str, sentiment: str) -> str:
-    """Rating-Only if: < 10 words AND positive sentiment AND no specific feature keyword found."""
+    """Rating-Only if: < 10 words AND no specific feature keyword (regardless of sentiment)."""
     if len(content.split()) >= 10:
-        return "substantive"
-    if sentiment != "positive":
         return "substantive"
     specific_features = [f for f in _keyword_features_from_text(content) if f != "General"]
     if specific_features:

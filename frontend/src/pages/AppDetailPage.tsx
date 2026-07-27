@@ -406,7 +406,7 @@ function SentimentTrendChart({ datasourceId }: { datasourceId: string }) {
             )}
             {/* Footer */}
             <div className="mt-2 pt-2 border-t border-white/10 text-slate-500">
-              {hp.total.toLocaleString()} Reviews
+              {hp.total.toLocaleString()} Bewertungen
             </div>
           </div>
         )}
@@ -498,7 +498,7 @@ function OverviewTab({ datasourceId, onSwitchTab }: { datasourceId: string; onSw
     <div className="space-y-8">
       {/* KPI cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard label="Total Reviews" value={review_count.toLocaleString()} />
+        <KpiCard label="Bewertungen gesamt" value={review_count.toLocaleString()} />
         <KpiCard label="Avg Rating" value={`${avg_rating.toFixed(1)} ★`} valueColor="text-amber-400" />
         <KpiCard label="Positive" value={`${posP}%`} valueColor="text-emerald-400"
           sub={`${sentiment.positive.toLocaleString()} reviews`} />
@@ -534,7 +534,7 @@ function OverviewTab({ datasourceId, onSwitchTab }: { datasourceId: string; onSw
                 <TrendingDown size={13} className="text-red-400" />
               </div>
               <div>
-                <p className="text-white text-sm font-semibold">Issues</p>
+                <p className="text-white text-sm font-semibold">Probleme</p>
                 <p className="text-slate-500 text-[10px]">{absaIssues.length} betroffene Features</p>
               </div>
             </div>
@@ -562,7 +562,7 @@ function OverviewTab({ datasourceId, onSwitchTab }: { datasourceId: string; onSw
                 </button>
               )
             })}
-            {absaIssues.length === 0 && <p className="text-slate-600 text-xs text-center py-3">Keine Issues gefunden</p>}
+            {absaIssues.length === 0 && <p className="text-slate-600 text-xs text-center py-3">Keine Probleme gefunden</p>}
           </div>
         </div>
 
@@ -615,8 +615,8 @@ function OverviewTab({ datasourceId, onSwitchTab }: { datasourceId: string; onSw
 
 const SEARCH_TYPES = [
   { value: 'hybrid',   label: 'Hybrid' },
-  { value: 'vector',   label: 'Semantic' },
-  { value: 'fulltext', label: 'Keyword' },
+  { value: 'vector',   label: 'Semantisch' },
+  { value: 'fulltext', label: 'Stichwort' },
 ]
 
 function ReviewsTab({ datasourceId }: { datasourceId: string }) {
@@ -678,7 +678,7 @@ function ReviewsTab({ datasourceId }: { datasourceId: string }) {
           </label>
           <button onClick={handleSearch} disabled={searching || query.trim().length < 2}
             className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
-            {searching ? 'Searching…' : 'Search'}
+            {searching ? 'Suche…' : 'Suchen'}
           </button>
         </div>
         {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
@@ -688,7 +688,7 @@ function ReviewsTab({ datasourceId }: { datasourceId: string }) {
       {searched && (
         <div>
           <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-3">
-            {results.length === 0 ? 'No results' : `${results.length} results`}
+            {results.length === 0 ? 'Keine Treffer' : `${results.length} Treffer`}
           </p>
           <div className="space-y-2">
             {results.map((r, i) => {
@@ -738,11 +738,11 @@ function ReviewsTab({ datasourceId }: { datasourceId: string }) {
 // ─── Tab: Insights ───────────────────────────────────────────────────────────
 
 const PRESETS = [
-  { id: 'issues',   label: 'Top Issues',     icon: TrendingDown, color: 'text-red-400 bg-red-400/10 border-red-400/20 hover:bg-red-400/20',
+  { id: 'issues',   label: 'Häufigste Probleme',  icon: TrendingDown, color: 'text-red-400 bg-red-400/10 border-red-400/20 hover:bg-red-400/20',
     query: 'Was sind die häufigsten Probleme und Beschwerden der Nutzer dieser App?' },
-  { id: 'loves',    label: 'What users love', icon: TrendingUp,  color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20 hover:bg-emerald-400/20',
+  { id: 'loves',    label: 'Was Nutzer schätzen', icon: TrendingUp,   color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20 hover:bg-emerald-400/20',
     query: 'Was schätzen und loben die Nutzer an dieser App am meisten?' },
-  { id: 'verdict',  label: 'Overall verdict', icon: Star,        color: 'text-amber-400 bg-amber-400/10 border-amber-400/20 hover:bg-amber-400/20',
+  { id: 'verdict',  label: 'Gesamtfazit',         icon: Star,         color: 'text-amber-400 bg-amber-400/10 border-amber-400/20 hover:bg-amber-400/20',
     query: 'Was ist das Gesamtfazit der Nutzer zu dieser App? Bitte gib eine ausgewogene Zusammenfassung.' },
 ]
 
@@ -795,12 +795,12 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
             if (ev.type === 'sources') setSources(ev.sources ?? [])
             else if (ev.type === 'token') setAnswer(prev => prev + (ev.content ?? ''))
             else if (ev.type === 'done') setDone(true)
-            else if (ev.type === 'error') setStreamError(ev.message ?? 'Unknown error')
+            else if (ev.type === 'error') setStreamError(ev.message ?? 'Unbekannter Fehler')
           } catch { /* skip malformed */ }
         }
       }
     } catch (err: unknown) {
-      if ((err as Error).name !== 'AbortError') setStreamError((err as Error).message || 'Stream error.')
+      if ((err as Error).name !== 'AbortError') setStreamError((err as Error).message || 'Verbindungsfehler.')
     } finally { setStreaming(false) }
   }
 
@@ -809,7 +809,7 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
 
       {/* Quick Insights */}
       <section>
-        <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-4">Quick Insights</p>
+        <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-4">Schnellübersicht</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {PRESETS.map(p => {
             const Icon = p.icon
@@ -837,7 +837,7 @@ function InsightsTab({ datasourceId }: { datasourceId: string }) {
             <div className="flex items-center gap-2">
               <Sparkles size={14} className="text-indigo-400" />
               <span className="text-white text-sm font-semibold">
-                {activePreset ? PRESETS.find(p => p.id === activePreset)?.label : 'Answer'}
+                {activePreset ? PRESETS.find(p => p.id === activePreset)?.label : 'Antwort'}
               </span>
             </div>
             {streaming && (
@@ -1056,325 +1056,8 @@ function ReclassifyGeneralSection({ datasourceId }: { datasourceId: string }) {
   )
 }
 
-// ─── Tab: Versions ───────────────────────────────────────────────────────────
 
-interface VersionCluster { cluster_id: string; label: string; cluster_type: string; mentions_in_version: number; total_cluster_mentions: number; pct_of_version: number }
-interface VersionStat    { version: string; version_source_mix: string; review_count: number; negative_pct: number; first_seen: string; last_seen: string; clusters: VersionCluster[] }
-interface VersionAnalysis { datasource_id: string; versions: VersionStat[] }
-interface CompareResult  { cluster_id: string; cluster_label: string; cluster_type: string; v1: string; v2: string; v1_mentions: number; v2_mentions: number; v1_review_count: number; v2_review_count: number; trend: string; verdict: string; analysis: string; v1_examples: string[]; v2_examples: string[] }
-interface VersionFeatureRow { feature: string; total: number; bug_count: number; resolved_count: number; avg_severity: number | null; neg_pct: number }
-interface VersionBreakdown { version: string; datasource_id: string; features: VersionFeatureRow[] }
 
-const TREND_CONFIG: Record<string, { label: string; color: string }> = {
-  new:        { label: 'Neu',          color: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
-  resolved:   { label: 'Behoben',      color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' },
-  declining:  { label: 'Rückläufig',   color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
-  persistent: { label: 'Persistent',   color: 'text-red-400 bg-red-400/10 border-red-400/20' },
-  worsening:  { label: 'Verschlechtert', color: 'text-red-500 bg-red-500/10 border-red-500/20' },
-  unknown:    { label: 'Unbekannt',    color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' },
-}
-
-const VERDICT_CONFIG: Record<string, { label: string; color: string }> = {
-  resolved:    { label: '✓ Behoben',              color: 'text-emerald-400' },
-  persistent:  { label: '✗ Weiterhin vorhanden',  color: 'text-red-400' },
-  no_evidence: { label: '— Keine Hinweise',        color: 'text-slate-400' },
-}
-
-function VersionsTab({ datasourceId }: { datasourceId: string }) {
-  const [data, setData]           = useState<VersionAnalysis | null>(null)
-  const [loading, setLoading]     = useState(true)
-  const [selectedV, setSelectedV] = useState<string>('')
-  const [compareV1, setCompareV1] = useState<string>('')
-  const [compareV2, setCompareV2] = useState<string>('')
-  const [comparing, setComparing] = useState(false)
-  const [compareResults, setCompareResults] = useState<CompareResult[]>([])
-  const [compareError, setCompareError] = useState('')
-  const [versionBreakdown, setVersionBreakdown] = useState<VersionBreakdown | null>(null)
-  const [loadingBreakdown, setLoadingBreakdown] = useState(false)
-
-  useEffect(() => {
-    dashboardApi.versionAnalysis(datasourceId)
-      .then((d: VersionAnalysis) => {
-        setData(d)
-        if (d.versions.length > 0) {
-          const last = d.versions[d.versions.length - 1].version
-          setSelectedV(last)
-          if (d.versions.length >= 2) {
-            setCompareV1(d.versions[d.versions.length - 2].version)
-            setCompareV2(last)
-          }
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [datasourceId])
-
-  useEffect(() => {
-    if (!selectedV) return
-    setLoadingBreakdown(true)
-    setVersionBreakdown(null)
-    intelligenceApi.versionBreakdown(datasourceId, selectedV)
-      .then(setVersionBreakdown)
-      .catch(() => {})
-      .finally(() => setLoadingBreakdown(false))
-  }, [datasourceId, selectedV])
-
-  const handleCompare = async () => {
-    if (!compareV1 || !compareV2 || compareV1 === compareV2 || !data) return
-    setComparing(true); setCompareResults([]); setCompareError('')
-
-    const vStat = data.versions.find(v => v.version === compareV1)
-    const issueClusters = (vStat?.clusters ?? []).filter(c => c.cluster_type === 'issue').slice(0, 5)
-
-    try {
-      const results = await Promise.all(
-        issueClusters.map(c =>
-          dashboardApi.versionCompare(datasourceId, c.cluster_id, compareV1, compareV2)
-        )
-      )
-      setCompareResults(results)
-    } catch {
-      setCompareError('Vergleich fehlgeschlagen. Bitte erneut versuchen.')
-    } finally { setComparing(false) }
-  }
-
-  if (loading) return <Spinner />
-  if (!data || data.versions.length === 0) return <Empty text="Keine Versionsdaten verfügbar." />
-
-  const selectedStat = data.versions.find(v => v.version === selectedV)
-  const issues    = selectedStat?.clusters.filter(c => c.cluster_type === 'issue')    ?? []
-  const strengths = selectedStat?.clusters.filter(c => c.cluster_type === 'strength') ?? []
-
-  return (
-    <div className="space-y-10">
-
-      {/* ── Versionsübersicht ── */}
-      <section>
-        <div className="flex items-center gap-3 mb-4 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Star size={14} className="text-indigo-400" />
-            <h2 className="text-white text-sm font-semibold">Version auswählen</h2>
-          </div>
-          <select
-            value={selectedV}
-            onChange={e => setSelectedV(e.target.value)}
-            className="bg-slate-800 border border-white/10 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            {[...data.versions].reverse().map(v => (
-              <option key={v.version} value={v.version}>
-                {v.version} ({v.review_count} Reviews · {v.first_seen.slice(0, 7)})
-              </option>
-            ))}
-          </select>
-          {selectedStat && (
-            <span className="text-slate-500 text-xs">
-              {selectedStat.first_seen} – {selectedStat.last_seen} ·
-              <span className="text-red-400 ml-1">{selectedStat.negative_pct}% negativ</span>
-              {selectedStat.version_source_mix !== 'provided' && (
-                <span className="text-slate-600 ml-1">(teilweise inferiert)</span>
-              )}
-            </span>
-          )}
-        </div>
-
-        {selectedStat && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Issues */}
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <TrendingDown size={13} className="text-red-400" />
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Issues in dieser Version</p>
-              </div>
-              {issues.length === 0
-                ? <p className="text-slate-600 text-xs py-4 text-center">Keine Issues gefunden</p>
-                : <div className="space-y-2">
-                    {issues.map(c => (
-                      <div key={c.cluster_id} className="bg-slate-900 border border-red-500/15 rounded-xl px-4 py-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-white text-sm font-medium">{c.label}</p>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-red-400 text-xs font-semibold">{c.mentions_in_version}×</span>
-                            <span className="text-slate-600 text-xs">{c.pct_of_version}%</span>
-                          </div>
-                        </div>
-                        <div className="mt-2 h-1 bg-slate-800 rounded-full overflow-hidden">
-                          <div className="h-full bg-red-500/60 rounded-full"
-                            style={{ width: `${Math.min(c.pct_of_version * 3, 100)}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-              }
-            </div>
-
-            {/* Strengths */}
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <TrendingUp size={13} className="text-emerald-400" />
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">Stärken in dieser Version</p>
-              </div>
-              {strengths.length === 0
-                ? <p className="text-slate-600 text-xs py-4 text-center">Keine Stärken gefunden</p>
-                : <div className="space-y-2">
-                    {strengths.map(c => (
-                      <div key={c.cluster_id} className="bg-slate-900 border border-emerald-500/15 rounded-xl px-4 py-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-white text-sm font-medium">{c.label}</p>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-emerald-400 text-xs font-semibold">{c.mentions_in_version}×</span>
-                            <span className="text-slate-600 text-xs">{c.pct_of_version}%</span>
-                          </div>
-                        </div>
-                        <div className="mt-2 h-1 bg-slate-800 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500/60 rounded-full"
-                            style={{ width: `${Math.min(c.pct_of_version * 3, 100)}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-              }
-            </div>
-          </div>
-        )}
-      </section>
-
-      {/* ── ABSA Feature-Analyse ── */}
-      {(loadingBreakdown || versionBreakdown) && (
-        <section>
-          <div className="flex items-center gap-2 mb-4">
-            <Cpu size={14} className="text-indigo-400" />
-            <h2 className="text-white text-sm font-semibold">ABSA Feature-Analyse</h2>
-            {selectedV && <span className="text-slate-600 text-xs font-mono">{selectedV}</span>}
-          </div>
-
-          {loadingBreakdown && (
-            <div className="flex justify-center py-8">
-              <RefreshCw size={16} className="animate-spin text-slate-600" />
-            </div>
-          )}
-
-          {!loadingBreakdown && versionBreakdown && (
-            <div className="bg-slate-900 border border-white/10 rounded-xl divide-y divide-white/[0.04]">
-              {versionBreakdown.features.length === 0 ? (
-                <p className="text-slate-600 text-xs py-6 text-center">Keine ABSA-Daten für diese Version</p>
-              ) : (
-                versionBreakdown.features.map(f => (
-                  <div key={f.feature} className="px-4 py-3 flex items-center gap-3">
-                    <p className="text-white text-xs font-medium w-24 shrink-0">{f.feature}</p>
-                    <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${f.neg_pct > 60 ? 'bg-red-500/70' : f.neg_pct > 30 ? 'bg-amber-500/70' : 'bg-emerald-500/60'}`}
-                        style={{ width: `${Math.max(f.neg_pct, 4)}%` }}
-                      />
-                    </div>
-                    <span className="text-slate-500 text-xs w-14 text-right shrink-0">{f.neg_pct}% neg</span>
-                    <span className="text-slate-600 text-xs w-8 text-right shrink-0">{f.total}×</span>
-                    <div className="flex gap-3 shrink-0 w-32 justify-end">
-                      {f.bug_count > 0 && <span className="text-red-400 text-[10px]">{f.bug_count} bugs</span>}
-                      {f.resolved_count > 0 && <span className="text-emerald-400 text-[10px]">{f.resolved_count} ✓</span>}
-                      {f.avg_severity != null && (
-                        <span className={`text-[10px] ${f.avg_severity >= 4 ? 'text-red-400' : f.avg_severity >= 3 ? 'text-amber-400' : 'text-slate-500'}`}>
-                          Sev {f.avg_severity.toFixed(1)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* ── Versionsvergleich ── */}
-      <section>
-        <div className="flex items-center gap-2 mb-4">
-          <RefreshCw size={14} className="text-indigo-400" />
-          <h2 className="text-white text-sm font-semibold">Versionen vergleichen</h2>
-        </div>
-
-        <div className="bg-slate-900 border border-white/10 rounded-xl p-4 space-y-4">
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500 text-xs">Von</span>
-              <select value={compareV1} onChange={e => setCompareV1(e.target.value)}
-                className="bg-slate-800 border border-white/10 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {data.versions.map(v => <option key={v.version} value={v.version}>{v.version}</option>)}
-              </select>
-            </div>
-            <span className="text-slate-600 text-sm">→</span>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500 text-xs">Nach</span>
-              <select value={compareV2} onChange={e => setCompareV2(e.target.value)}
-                className="bg-slate-800 border border-white/10 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                {data.versions.map(v => <option key={v.version} value={v.version}>{v.version}</option>)}
-              </select>
-            </div>
-            <button
-              onClick={handleCompare}
-              disabled={comparing || compareV1 === compareV2}
-              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
-            >
-              {comparing ? <><RefreshCw size={13} className="animate-spin" /> Analysiere…</> : 'Vergleichen'}
-            </button>
-          </div>
-
-          {compareError && <p className="text-red-400 text-xs">{compareError}</p>}
-
-          {compareResults.length > 0 && (
-            <div className="space-y-3 pt-2 border-t border-white/[0.06]">
-              {compareResults.map(r => {
-                const tConf = TREND_CONFIG[r.trend] ?? TREND_CONFIG.unknown
-                const vConf = VERDICT_CONFIG[r.verdict] ?? VERDICT_CONFIG.no_evidence
-                return (
-                  <div key={r.cluster_id} className="bg-slate-800/50 border border-white/5 rounded-xl p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <p className="text-white text-sm font-semibold">{r.cluster_label}</p>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${tConf.color}`}>
-                          {tConf.label}
-                        </span>
-                        <span className={`text-xs font-semibold ${vConf.color}`}>{vConf.label}</span>
-                      </div>
-                    </div>
-
-                    {/* Mentions comparison */}
-                    <div className="flex items-center gap-4 text-xs text-slate-400">
-                      <span><span className="text-white font-medium">{r.v1_mentions}</span> Erwähnungen in {r.v1}</span>
-                      <span>→</span>
-                      <span><span className={r.v2_mentions < r.v1_mentions ? 'text-emerald-400' : 'text-red-400'} style={{ fontWeight: 600 }}>{r.v2_mentions}</span> Erwähnungen in {r.v2}</span>
-                    </div>
-
-                    {/* LLM Analysis */}
-                    <p className="text-slate-300 text-xs leading-relaxed">{r.analysis}</p>
-
-                    {/* Examples */}
-                    {(r.v1_examples.length > 0 || r.v2_examples.length > 0) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-white/[0.04]">
-                        {r.v1_examples.length > 0 && (
-                          <div>
-                            <p className="text-slate-600 text-[10px] font-medium mb-1.5">{r.v1}</p>
-                            <p className="text-slate-400 text-xs leading-relaxed line-clamp-3 italic">"{r.v1_examples[0]}"</p>
-                          </div>
-                        )}
-                        {r.v2_examples.length > 0 && (
-                          <div>
-                            <p className="text-slate-600 text-[10px] font-medium mb-1.5">{r.v2}</p>
-                            <p className="text-slate-400 text-xs leading-relaxed line-clamp-3 italic">"{r.v2_examples[0]}"</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </section>
-    </div>
-  )
-}
 
 // ─── Tab: Intelligence ───────────────────────────────────────────────────────
 
@@ -1552,8 +1235,11 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
   const [detail, setDetail]               = useState<FeatureDetail | null>(null)
   const [loading, setLoading]             = useState(true)
   const [signalTypeFilter, setSignalTypeFilter] = useState<string | null>(() => lockedSignalType ?? null)
-  const [versionFilter, setVersionFilter] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<string | null>(null)
+  const [dateFrom, setDateFrom] = useState<string>('')
+  const [dateTo, setDateTo] = useState<string>('')
+  const [versionFrom, setVersionFrom] = useState<string>('')
+  const [versionTo, setVersionTo] = useState<string>('')
   const [filteredSignals, setFilteredSignals] = useState<SentenceSignal[] | null>(null)
   const [loadingFilter, setLoadingFilter] = useState(false)
   const [filterError, setFilterError] = useState('')
@@ -1581,17 +1267,17 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
 
   // Filtered/sorted load
   useEffect(() => {
-    if (!signalTypeFilter && !versionFilter && !sortBy) { setFilteredSignals(null); setFilterError(''); return }
+    if (!signalTypeFilter && !sortBy && !dateFrom && !dateTo && !versionFrom && !versionTo) { setFilteredSignals(null); setFilterError(''); return }
     setLoadingFilter(true)
     setFilterError('')
-    intelligenceApi.feature(datasourceId, feature, signalTypeFilter ?? undefined, versionFilter ?? undefined, sortBy ?? undefined)
+    intelligenceApi.feature(datasourceId, feature, signalTypeFilter ?? undefined, undefined, sortBy ?? undefined, dateFrom || undefined, dateTo || undefined, versionFrom || undefined, versionTo || undefined)
       .then((d: FeatureDetail) => setFilteredSignals(d.top_signals))
       .catch((e: unknown) => {
         const msg = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail ?? 'Filter fehlgeschlagen'
         setFilterError(msg)
       })
       .finally(() => setLoadingFilter(false))
-  }, [signalTypeFilter, versionFilter, sortBy, feature, datasourceId])
+  }, [signalTypeFilter, sortBy, dateFrom, dateTo, versionFrom, versionTo, feature, datasourceId])
 
   const displaySignals = filteredSignals ?? detail?.top_signals ?? []
 
@@ -1600,17 +1286,19 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
     setSignalTypeFilter(prev => prev === st ? null : st)
     setFilteredSignals(null)
   }
-  const toggleVersion    = (v: string)  => { setVersionFilter(prev => prev === v ? null : v);      setFilteredSignals(null) }
-  const toggleSort       = (s: string)  => { setSortBy(prev => prev === s ? null : s);             setFilteredSignals(null) }
+const toggleSort       = (s: string)  => { setSortBy(prev => prev === s ? null : s);             setFilteredSignals(null) }
   const clearFilters = () => {
     if (!lockedSignalType) setSignalTypeFilter(null)
-    setVersionFilter(null)
     setSortBy(null)
+    setDateFrom('')
+    setDateTo('')
+    setVersionFrom('')
+    setVersionTo('')
     setFilteredSignals(null)
   }
 
   const hasFilter = !!(
-    (signalTypeFilter && signalTypeFilter !== lockedSignalType) || versionFilter || sortBy
+    (signalTypeFilter && signalTypeFilter !== lockedSignalType) || sortBy || dateFrom || dateTo || versionFrom || versionTo
   )
 
   return (
@@ -1689,36 +1377,97 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
               </div>
             )}
 
-            {/* Version-Trend — klickbar zum Filtern */}
-            {detail.version_trend.length > 0 && (
+
+            {/* Zeitraum-Filter */}
+            <div>
+              <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">
+                Zeitraum <span className="text-slate-700 font-normal normal-case">— optional einschränken</span>
+              </p>
+              <div className="flex items-center gap-1.5 mb-2">
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); setFilteredSignals(null) }}
+                  className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                    !dateFrom && !dateTo
+                      ? 'text-indigo-300 bg-indigo-500/15 border-indigo-500/40'
+                      : 'text-slate-500 border-slate-700 hover:text-slate-300 hover:border-slate-500'
+                  }`}
+                >
+                  Alle
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-1">
+                  <span className="text-slate-600 text-[10px] shrink-0">Von</span>
+                  <input
+                    type="date"
+                    value={dateFrom}
+                    max={dateTo || undefined}
+                    onChange={e => { setDateFrom(e.target.value); setFilteredSignals(null) }}
+                    className="flex-1 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/60 [color-scheme:dark]"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 flex-1">
+                  <span className="text-slate-600 text-[10px] shrink-0">Bis</span>
+                  <input
+                    type="date"
+                    value={dateTo}
+                    min={dateFrom || undefined}
+                    onChange={e => { setDateTo(e.target.value); setFilteredSignals(null) }}
+                    className="flex-1 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/60 [color-scheme:dark]"
+                  />
+                </div>
+                {(dateFrom || dateTo) && (
+                  <button
+                    onClick={() => { setDateFrom(''); setDateTo(''); setFilteredSignals(null) }}
+                    className="text-slate-600 hover:text-white transition-colors shrink-0"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Versionsbereich-Filter */}
+            {detail.version_trend.length > 1 && (
               <div>
                 <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider mb-2">
-                  Version-Trend <span className="text-slate-700 font-normal normal-case">— klicken zum Filtern</span>
+                  Versionsbereich <span className="text-slate-700 font-normal normal-case">— Von / Bis Version</span>
                 </p>
-                <div className="space-y-1.5">
-                  {detail.version_trend.slice(0, 10).map(v => {
-                    const isActive = versionFilter === v.version
-                    return (
-                      <button
-                        key={v.version}
-                        onClick={() => toggleVersion(v.version)}
-                        className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 transition-all text-left
-                          ${isActive
-                            ? 'bg-indigo-500/15 border border-indigo-500/40'
-                            : 'bg-slate-800/40 border border-white/5 hover:border-white/15'
-                          }`}
-                      >
-                        <span className={`text-xs font-mono w-24 shrink-0 ${isActive ? 'text-indigo-300' : 'text-white'}`}>{v.version}</span>
-                        <div className="flex-1 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${isActive ? 'bg-indigo-400/80' : 'bg-indigo-500/50'}`}
-                            style={{ width: `${Math.min(100, (v.mention_count / detail.version_trend[0].mention_count) * 100)}%` }} />
-                        </div>
-                        <span className="text-slate-400 text-xs w-12 text-right shrink-0">{v.mention_count}×</span>
-                        {v.bug_count > 0 && <span className="text-red-400 text-[10px] shrink-0">{v.bug_count} bugs</span>}
-                        {v.resolved_count > 0 && <span className="text-emerald-400 text-[10px] shrink-0">{v.resolved_count} ✓</span>}
-                      </button>
-                    )
-                  })}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-1">
+                    <span className="text-slate-600 text-[10px] shrink-0">Von</span>
+                    <select
+                      value={versionFrom}
+                      onChange={e => { setVersionFrom(e.target.value); setFilteredSignals(null) }}
+                      className="flex-1 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500/60 appearance-none"
+                    >
+                      <option value="">Alle</option>
+                      {[...detail.version_trend].reverse().map(v => (
+                        <option key={v.version} value={v.version}>{v.version}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-1">
+                    <span className="text-slate-600 text-[10px] shrink-0">Bis</span>
+                    <select
+                      value={versionTo}
+                      onChange={e => { setVersionTo(e.target.value); setFilteredSignals(null) }}
+                      className="flex-1 bg-slate-800/60 border border-slate-700/60 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500/60 appearance-none"
+                    >
+                      <option value="">Alle</option>
+                      {detail.version_trend.map(v => (
+                        <option key={v.version} value={v.version}>{v.version}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {(versionFrom || versionTo) && (
+                    <button
+                      onClick={() => { setVersionFrom(''); setVersionTo(''); setFilteredSignals(null) }}
+                      className="text-slate-600 hover:text-white transition-colors shrink-0"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1750,9 +1499,13 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
 
               <div className="flex items-center justify-between mb-2">
                 <p className="text-slate-500 text-[10px] font-semibold uppercase tracking-wider">
-                  {hasFilter ? `${loadingFilter ? '…' : displaySignals.length} Reviews` : 'Top Reviews'}
+                  {hasFilter ? `${loadingFilter ? '…' : displaySignals.length} Bewertungen` : 'Top Bewertungen'}
                   {signalTypeFilter && <span className="text-indigo-400 ml-1">· {SIGNAL_LABELS[signalTypeFilter] ?? signalTypeFilter}</span>}
-                  {versionFilter && <span className="text-indigo-400 ml-1">· v{versionFilter}</span>}
+                  {dateFrom && <span className="text-indigo-400 ml-1">· ab {dateFrom}</span>}
+                  {dateTo && <span className="text-indigo-400 ml-1">· bis {dateTo}</span>}
+                  {(versionFrom || versionTo) && (
+                    <span className="text-indigo-400 ml-1">· {versionFrom || '…'} → {versionTo || '…'}</span>
+                  )}
                   {sortBy && <span className="text-slate-500 ml-1">· sortiert</span>}
                 </p>
                 {hasFilter && (
@@ -1771,7 +1524,7 @@ function FeatureDetailModal({ feature, datasourceId, onClose, lockedSignalType, 
               ) : (
                 <div className="space-y-2">
                   {displaySignals.map(s => (
-                    <ReviewSignalCard key={s.id} signal={s} feature={feature} versionFilter={versionFilter} />
+                    <ReviewSignalCard key={s.id} signal={s} feature={feature} />
                   ))}
                 </div>
               )}
@@ -1826,7 +1579,7 @@ const VERDICT_STYLES: Record<string, { label: string; color: string; dot: string
   keine_daten:            { label: 'Keine Daten',            color: 'text-slate-400 bg-slate-800 border-slate-700',          dot: 'bg-slate-500'   },
 }
 
-function ReviewSignalCard({ signal: s, versionFilter }: { signal: SentenceSignal; feature: string; versionFilter: string | null }) {
+function ReviewSignalCard({ signal: s }: { signal: SentenceSignal; feature: string }) {
   const [openPanel, setOpenPanel] = useState<'resolution' | 'history' | null>(null)
 
   // Resolution check state
@@ -1871,7 +1624,7 @@ function ReviewSignalCard({ signal: s, versionFilter }: { signal: SentenceSignal
           <SeverityDot severity={s.severity} />
           {s.is_resolved && <span className="text-emerald-400 text-[10px]">✓ behoben</span>}
           {s.score && <Stars score={s.score} />}
-          {!versionFilter && s.version && <span className="text-slate-600 text-[10px] font-mono">{s.version}</span>}
+          {s.version && <span className="text-slate-600 text-[10px] font-mono">{s.version}</span>}
           {s.reviewed_at && <span className="text-slate-700 text-[10px] ml-auto">{s.reviewed_at}</span>}
           <button
             onClick={openResolution}
@@ -2260,16 +2013,15 @@ function Empty({ text }: { text: string }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'issues' | 'ideas' | 'reviews' | 'insights' | 'versions' | 'intelligence'
+type Tab = 'overview' | 'issues' | 'ideas' | 'reviews' | 'insights' | 'intelligence'
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'overview',     label: 'Overview',     icon: LayoutGrid },
-  { id: 'issues',       label: 'Issues',       icon: TrendingDown },
-  { id: 'ideas',        label: 'Ideas',        icon: Lightbulb },
-  { id: 'reviews',      label: 'Reviews',      icon: Search },
-  { id: 'insights',     label: 'Insights',     icon: Sparkles },
-  { id: 'versions',     label: 'Versions',     icon: TrendingUp },
-  { id: 'intelligence', label: 'Intelligence', icon: Cpu },
+  { id: 'overview',     label: 'Übersicht',   icon: LayoutGrid },
+  { id: 'issues',       label: 'Probleme',    icon: TrendingDown },
+  { id: 'ideas',        label: 'Ideen',       icon: Lightbulb },
+  { id: 'reviews',      label: 'Bewertungen', icon: Search },
+  { id: 'insights',     label: 'Einblicke',   icon: Sparkles },
+  { id: 'intelligence', label: 'Analyse',     icon: Cpu },
 ]
 
 export function AppDetailPage() {
@@ -2377,7 +2129,6 @@ export function AppDetailPage() {
           {tab === 'ideas'        && <IdeasTab        datasourceId={id} />}
           {tab === 'reviews'      && <ReviewsTab      datasourceId={id} />}
           {tab === 'insights'     && <InsightsTab     datasourceId={id} />}
-          {tab === 'versions'     && <VersionsTab     datasourceId={id} />}
           {tab === 'intelligence' && <IntelligenceTab datasourceId={id} />}
         </div>
       </div>
