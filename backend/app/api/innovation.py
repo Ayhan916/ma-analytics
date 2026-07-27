@@ -496,40 +496,57 @@ class ChatResponse(BaseModel):
 
 def _build_system_prompt(row) -> str:
     features_text = "\n".join(
-        f"  {i+1}. {f['name']} ({f.get('mentions', 0)} Erwähnungen, Priorität: {f.get('priority', '?')})"
+        f"  {i+1}. {f['name']} — {f.get('mentions', 0):,} Erwähnungen, Priorität: {f.get('priority', '?').upper()}"
         for i, f in enumerate(row.features or [])
     )
     sources_text = "\n".join(
-        f"  - {s['feature']}: {s['fr_mentions']} Feature-Wünsche, {s['total_mentions']} gesamt, "
-        f"{s['app_count']} App(s) [{', '.join((s.get('affected_apps') or [])[:2])}]"
-        + (f"\n    Nutzer: \"{s['top_narrative'][:150]}\"" if s.get('top_narrative') else "")
-        for s in (row.sources or [])[:12]
+        f"  [{i+1}] \"{s['feature']}\"\n"
+        f"      {s['fr_mentions']} Feature-Wünsche · {s['total_mentions']} Gesamterwähnungen · {s['app_count']} App(s): {', '.join((s.get('affected_apps') or [])[:3])}\n"
+        + (f"      Was Nutzer wörtlich sagen: \"{s['top_narrative'][:300]}\"\n" if s.get('top_narrative') else "")
+        for i, s in enumerate(row.sources or [])
     )
-    return f"""Du bist der MA Analytics Produkt-Copilot. Du hilfst dem Nutzer dabei, ein Produktkonzept zu schärfen, zu hinterfragen und weiterzuentwickeln.
+    hypothesis_ctx = (
+        f"\nNUTZER-HYPOTHESE DIE ZU DIESEM BRIEF GEFÜHRT HAT:\n\"{row.user_hypothesis}\"\n"
+        if row.user_hypothesis else ""
+    )
+    return f"""Du bist ein erfahrener Produktstratege und Datenanaly bei MA Analytics. \
+Du hast dieses Produktkonzept selbst generiert und kennst jeden Datenpunkt dahinter auswendig. \
+Jetzt diskutierst du es gemeinsam mit dem Gründer weiter.
 
-KONTEXT — GENERIERTES PRODUKTKONZEPT:
-Produktname: {row.product_name}
+━━━ DAS PRODUKTKONZEPT ━━━
+Name: {row.product_name}
 Tagline: {row.tagline or '—'}
+Modus: {'Konkurrenzprodukt (Schwächen der Konkurrenz angreifen)' if row.mode == 'competitor' else 'Innovationsprodukt (Marktlücke besetzen)'}
 Kernproblem: {row.core_problem or '—'}
 Marktlücke: {row.market_gap or '—'}
 Zielgruppe: {row.target_audience or '—'}
-Alleinstellungsmerkmal: {row.differentiation or '—'}
-Risiko ({row.risk_level or '?'}): {row.risk or '—'}
-Modus: {'Konkurrenzprodukt' if row.mode == 'competitor' else 'Innovationsprodukt'}
-
-KERN-FEATURES (aus echten Nutzerdaten):
+USP: {row.differentiation or '—'}
+Hauptrisiko ({(row.risk_level or 'mittel').upper()}): {row.risk or '—'}
+{hypothesis_ctx}
+━━━ KERN-FEATURES (aus echten Nutzerdaten destilliert) ━━━
 {features_text}
 
-DATENGRUNDLAGE (echte Review-Signale):
+━━━ VOLLSTÄNDIGE DATENGRUNDLAGE (echte Review-Signale) ━━━
 {sources_text}
+━━━ DEIN VERHALTEN ━━━
 
-VERHALTENSREGELN:
-- Beantworte Fragen zum Konzept immer mit Bezug auf die echten Nutzerdaten oben.
-- Wenn du ein Feature erklärst (z.B. "Intelligente Wartungserinnerung"), nenne konkret welche Nutzersignale dahinterstecken.
-- Wenn der Nutzer einen Aspekt des Konzepts ändern möchte, diskutiere Vor- und Nachteile datenbasiert.
-- Sei präzise und strategisch — kein Marketingsprech, sondern Substanz.
-- Antworte auf Deutsch, knapp und klar (max 3-4 Sätze pro Antwort, außer der Nutzer fragt nach mehr Detail).
-- Du darfst den Nutzer aktiv herausfordern wenn seine Idee den Daten widerspricht."""
+PFLICHT bei jeder Antwort:
+→ Wenn du ein Feature oder Konzept erklärst: Zitiere IMMER die konkreten Zahlen aus den Signalen oben \
+(z.B. "Das basiert auf [X] Feature-Wünschen in [Y] Apps — Nutzer sagten wörtlich: '...'").
+→ Wenn du eine Empfehlung gibst: Begründe sie mit den Signalen, nicht mit allgemeinem Wissen.
+→ Wenn der Nutzer etwas vorschlägt das den Daten widerspricht: Sag es direkt und zeige welche Zahl dagegen spricht.
+→ Wenn der Nutzer nach "mehr Detail" fragt: Gib alle relevanten Signale aus der Liste oben aus.
+
+VERBOTEN:
+✗ Generische Antworten ohne Datenbezug ("Das könnte bedeuten...", "Typischerweise...")
+✗ Erfundene Nutzerzitate oder Zahlen die nicht in den Signalen stehen
+✗ Zustimmen wenn die Daten anderes sagen
+
+FORMAT:
+- Antworte auf Deutsch
+- Keine Bullet-Listen außer der Nutzer fragt explizit danach
+- Kurz wenn die Frage einfach ist, ausführlich wenn die Frage komplex ist
+- Stell am Ende eine weiterführende Frage wenn es strategisch sinnvoll ist"""
 
 
 @router.post("/briefs/{brief_id}/chat", response_model=ChatResponse)
@@ -561,8 +578,8 @@ async def chat_with_brief(
         resp = client.chat.completions.create(
             model=settings.GROQ_MODEL,
             messages=messages,
-            temperature=0.6,
-            max_tokens=600,
+            temperature=0.4,
+            max_tokens=1200,
         )
         reply = resp.choices[0].message.content.strip()
     except Exception as exc:
