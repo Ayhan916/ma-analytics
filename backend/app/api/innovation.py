@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import structlog
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,12 +18,12 @@ log = structlog.get_logger(__name__)
 
 
 class InnovationRequest(BaseModel):
-    mode: str = "competitor"       # "competitor" | "innovation"
-    scope: str = "all"             # "all" | "industry" | "datasource"
-    industry: str | None = None
-    datasource_ids: list[str] | None = None
-    market: str | None = None      # country code filter
-    user_hypothesis: str | None = None  # optional strategic brief from user
+    mode: str = "competitor"
+    scope: str = "all"
+    industry: Optional[str] = None
+    datasource_ids: Optional[List[str]] = None
+    market: Optional[str] = None
+    user_hypothesis: Optional[str] = None
 
 
 class FeatureSignal(BaseModel):
@@ -30,8 +31,8 @@ class FeatureSignal(BaseModel):
     total_mentions: int
     fr_mentions: int
     app_count: int
-    affected_apps: list[str]
-    top_narrative: str | None
+    affected_apps: List[str]
+    top_narrative: Optional[str]
 
 
 class ProductFeature(BaseModel):
@@ -45,25 +46,25 @@ class InnovationBrief(BaseModel):
     tagline: str
     core_problem: str
     market_gap: str
-    features: list[ProductFeature]
+    features: List[ProductFeature]
     target_audience: str
     differentiation: str
     risk: str
     risk_level: str
-    hypothesis_check: str | None = None   # only when user_hypothesis was provided
-    hypothesis_alignment: str | None = None  # "stark" | "mittel" | "schwach"
+    hypothesis_check: Optional[str] = None
+    hypothesis_alignment: Optional[str] = None
     total_demand: int
     apps_analyzed: int
-    sources: list[FeatureSignal]
+    sources: List[FeatureSignal]
 
 
 def _build_where(
     scope: str,
-    industry: str | None,
-    datasource_ids: list[str] | None,
-    market: str | None,
+    industry: Optional[str],
+    datasource_ids: Optional[List[str]],
+    market: Optional[str],
     user_id: str,
-) -> tuple[str, dict]:
+) -> tuple:
     conditions = ["ds.user_id = :user_id"]
     params: dict = {"user_id": user_id}
 
@@ -125,7 +126,7 @@ async def _aggregate_signals(
     ]
 
 
-def _build_prompt(mode: str, signals: list[dict], meta: dict, user_hypothesis: str | None) -> str:
+def _build_prompt(mode: str, signals: list, meta: dict, user_hypothesis: Optional[str]) -> str:
     top = signals[:20]
     signals_text = "\n".join(
         f"- {s['feature']}: {s['fr_mentions']} Feature-Wünsche, {s['total_mentions']} Gesamterwähnungen, "
