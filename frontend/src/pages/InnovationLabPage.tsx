@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { AppShell } from '../components/AppShell'
 import { datasourceApi, innovationApi } from '../services/api'
 import {
   Lightbulb, Zap, Target, Users, ShieldAlert, TrendingUp,
   ChevronDown, ChevronUp, Loader2, AlertCircle, Sparkles,
   BarChart3, Globe, MessageSquare, CheckCircle2, AlertTriangle,
-  XCircle, Clock, Trash2, History
+  XCircle, Clock, Trash2, History, Send, Bot
 } from 'lucide-react'
 
 interface ProductFeature { name: string; mentions: number; priority: string }
@@ -115,8 +115,40 @@ function BriefCard({ brief, onDelete, onClick, active }: {
   )
 }
 
+interface ChatMsg { role: 'user' | 'assistant'; content: string }
+
 function BriefDetail({ brief, mode }: { brief: SavedBriefFull; mode: string }) {
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [chatHistory, setChatHistory] = useState<ChatMsg[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatEndRef = React.useRef<HTMLDivElement>(null)
+
+  // Scroll to bottom on new message
+  React.useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatHistory, chatLoading])
+
+  const handleChat = async () => {
+    const msg = chatInput.trim()
+    if (!msg || chatLoading) return
+    setChatInput('')
+    const userMsg: ChatMsg = { role: 'user', content: msg }
+    setChatHistory(h => [...h, userMsg])
+    setChatLoading(true)
+    try {
+      const res = await innovationApi.chat(brief.id, {
+        message: msg,
+        history: chatHistory,
+      })
+      setChatHistory(h => [...h, { role: 'assistant', content: res.reply }])
+    } catch {
+      setChatHistory(h => [...h, { role: 'assistant', content: 'Fehler beim Laden der Antwort. Bitte erneut versuchen.' }])
+    } finally {
+      setChatLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Hero */}
@@ -247,6 +279,95 @@ function BriefDetail({ brief, mode }: { brief: SavedBriefFull; mode: string }) {
           )}
         </div>
       )}
+
+      {/* Copilot Chat */}
+      <div className="bg-slate-900 border border-indigo-500/20 rounded-xl overflow-hidden">
+        <div className="flex items-center gap-2.5 px-4 py-3 border-b border-white/[0.06] bg-indigo-500/5">
+          <Bot size={15} className="text-indigo-400 shrink-0" />
+          <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">Strategie-Copilot</span>
+          <span className="text-[10px] text-slate-500 ml-1">— stelle Fragen zum Konzept oder diskutiere Anpassungen</span>
+        </div>
+
+        {/* Messages */}
+        <div className="px-4 py-3 space-y-3 max-h-80 overflow-y-auto">
+          {chatHistory.length === 0 && !chatLoading && (
+            <div className="py-4 text-center">
+              <p className="text-xs text-slate-600">Noch keine Fragen gestellt.</p>
+              <div className="flex flex-wrap gap-2 justify-center mt-3">
+                {[
+                  `Was verstehst du unter "${brief.features[0]?.name}"?`,
+                  'Welches Feature hat den größten Marktbedarf?',
+                  'Wie würde das Monetarisierungsmodell aussehen?',
+                ].map(q => (
+                  <button
+                    key={q}
+                    onClick={() => { setChatInput(q); }}
+                    className="text-[11px] px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 transition-colors text-left"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {chatHistory.map((msg, i) => (
+            <div key={i} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                msg.role === 'user' ? 'bg-indigo-500/20' : 'bg-slate-700'
+              }`}>
+                {msg.role === 'user'
+                  ? <span className="text-[9px] font-bold text-indigo-400">Du</span>
+                  : <Bot size={11} className="text-slate-400" />
+                }
+              </div>
+              <div className={`max-w-[80%] rounded-xl px-3 py-2 text-sm leading-relaxed ${
+                msg.role === 'user'
+                  ? 'bg-indigo-500/10 text-slate-200 rounded-tr-sm'
+                  : 'bg-slate-800 text-slate-200 rounded-tl-sm'
+              }`}>
+                {msg.content}
+              </div>
+            </div>
+          ))}
+
+          {chatLoading && (
+            <div className="flex gap-2.5">
+              <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center shrink-0">
+                <Bot size={11} className="text-slate-400" />
+              </div>
+              <div className="bg-slate-800 rounded-xl rounded-tl-sm px-3 py-2.5 flex gap-1 items-center">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+
+        {/* Input */}
+        <div className="px-3 py-3 border-t border-white/[0.06] flex gap-2">
+          <input
+            value={chatInput}
+            onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleChat()}
+            placeholder="Frage zum Konzept stellen..."
+            className="flex-1 bg-slate-800/60 border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/40"
+          />
+          <button
+            onClick={handleChat}
+            disabled={!chatInput.trim() || chatLoading}
+            className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 text-sm font-medium ${
+              chatInput.trim() && !chatLoading
+                ? 'bg-indigo-500 hover:bg-indigo-400 text-white'
+                : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+            }`}
+          >
+            <Send size={13} />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

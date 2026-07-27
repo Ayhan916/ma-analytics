@@ -474,3 +474,99 @@ async def generate_innovation_brief(
         user_hypothesis=body.user_hypothesis,
         **result.dict(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat endpoint
+# ---------------------------------------------------------------------------
+
+class ChatMessage(BaseModel):
+    role: str   # "user" | "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[ChatMessage]] = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
+def _build_system_prompt(row) -> str:
+    features_text = "\n".join(
+        f"  {i+1}. {f['name']} ({f.get('mentions', 0)} Erwähnungen, Priorität: {f.get('priority', '?')})"
+        for i, f in enumerate(row.features or [])
+    )
+    sources_text = "\n".join(
+        f"  - {s['feature']}: {s['fr_mentions']} Feature-Wünsche, {s['total_mentions']} gesamt, "
+        f"{s['app_count']} App(s) [{', '.join((s.get('affected_apps') or [])[:2])}]"
+        + (f"\n    Nutzer: \"{s['top_narrative'][:150]}\"" if s.get('top_narrative') else "")
+        for s in (row.sources or [])[:12]
+    )
+    return f"""Du bist der MA Analytics Produkt-Copilot. Du hilfst dem Nutzer dabei, ein Produktkonzept zu schärfen, zu hinterfragen und weiterzuentwickeln.
+
+KONTEXT — GENERIERTES PRODUKTKONZEPT:
+Produktname: {row.product_name}
+Tagline: {row.tagline or '—'}
+Kernproblem: {row.core_problem or '—'}
+Marktlücke: {row.market_gap or '—'}
+Zielgruppe: {row.target_audience or '—'}
+Alleinstellungsmerkmal: {row.differentiation or '—'}
+Risiko ({row.risk_level or '?'}): {row.risk or '—'}
+Modus: {'Konkurrenzprodukt' if row.mode == 'competitor' else 'Innovationsprodukt'}
+
+KERN-FEATURES (aus echten Nutzerdaten):
+{features_text}
+
+DATENGRUNDLAGE (echte Review-Signale):
+{sources_text}
+
+VERHALTENSREGELN:
+- Beantworte Fragen zum Konzept immer mit Bezug auf die echten Nutzerdaten oben.
+- Wenn du ein Feature erklärst (z.B. "Intelligente Wartungserinnerung"), nenne konkret welche Nutzersignale dahinterstecken.
+- Wenn der Nutzer einen Aspekt des Konzepts ändern möchte, diskutiere Vor- und Nachteile datenbasiert.
+- Sei präzise und strategisch — kein Marketingsprech, sondern Substanz.
+- Antworte auf Deutsch, knapp und klar (max 3-4 Sätze pro Antwort, außer der Nutzer fragt nach mehr Detail).
+- Du darfst den Nutzer aktiv herausfordern wenn seine Idee den Daten widerspricht."""
+
+
+@router.post("/briefs/{brief_id}/chat", response_model=ChatResponse)
+async def chat_with_brief(
+    brief_id: str,
+    body: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (await db.execute(text("""
+        SELECT * FROM innovation_briefs WHERE id = :id AND user_id = :uid
+    """), {"id": brief_id, "uid": current_user.id})).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Brief nicht gefunden.")
+
+    api_key = settings.GROQ_API_KEY or settings.GROQ_API_KEY_2
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Kein Groq API Key konfiguriert.")
+
+    system_prompt = _build_system_prompt(row)
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in (body.history or [])[-10:]:   # max 10 turns context
+        messages.append({"role": msg.role, "content": msg.content})
+    messages.append({"role": "user", "content": body.message})
+
+    try:
+        client = Groq(api_key=api_key)
+        resp = client.chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=messages,
+            temperature=0.6,
+            max_tokens=600,
+        )
+        reply = resp.choices[0].message.content.strip()
+    except Exception as exc:
+        log.error("groq_chat_error", error=str(exc))
+        raise HTTPException(status_code=500, detail=f"Groq-Fehler: {str(exc)[:200]}")
+
+    return ChatResponse(reply=reply)

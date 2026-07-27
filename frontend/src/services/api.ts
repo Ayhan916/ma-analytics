@@ -258,6 +258,13 @@ export const innovationApi = {
   deleteBrief: async (id: string) => {
     await apiClient.delete(`/innovation/briefs/${id}`)
   },
+  chat: async (briefId: string, body: {
+    message: string
+    history: { role: string; content: string }[]
+  }) => {
+    const { data } = await apiClient.post(`/innovation/briefs/${briefId}/chat`, body)
+    return data
+  },
 }
 
 // Messages
