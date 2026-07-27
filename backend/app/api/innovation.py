@@ -226,7 +226,155 @@ def _call_groq(prompt: str) -> dict:
     return json.loads(raw.strip())
 
 
-@router.post("/generate", response_model=InnovationBrief)
+class SavedBriefMeta(BaseModel):
+    id: str
+    created_at: str
+    mode: str
+    scope: str
+    product_name: str
+    tagline: Optional[str]
+    risk_level: Optional[str]
+    total_demand: Optional[int]
+    apps_analyzed: Optional[int]
+    user_hypothesis: Optional[str]
+    industry: Optional[str]
+
+
+class SavedBriefFull(InnovationBrief):
+    id: str
+    created_at: str
+    mode: str
+    scope: str
+    industry: Optional[str] = None
+    user_hypothesis: Optional[str] = None
+
+
+async def _save_brief(
+    db: AsyncSession,
+    user_id: str,
+    body: InnovationRequest,
+    result: InnovationBrief,
+) -> str:
+    sql = text("""
+        INSERT INTO innovation_briefs (
+            user_id, mode, scope, industry, market, user_hypothesis,
+            product_name, tagline, core_problem, market_gap,
+            features, target_audience, differentiation,
+            risk, risk_level, hypothesis_check, hypothesis_alignment,
+            total_demand, apps_analyzed, sources
+        ) VALUES (
+            :user_id, :mode, :scope, :industry, :market, :user_hypothesis,
+            :product_name, :tagline, :core_problem, :market_gap,
+            :features, :target_audience, :differentiation,
+            :risk, :risk_level, :hypothesis_check, :hypothesis_alignment,
+            :total_demand, :apps_analyzed, :sources
+        ) RETURNING id
+    """)
+    row = (await db.execute(sql, {
+        "user_id": user_id,
+        "mode": body.mode,
+        "scope": body.scope,
+        "industry": body.industry,
+        "market": body.market,
+        "user_hypothesis": body.user_hypothesis,
+        "product_name": result.product_name,
+        "tagline": result.tagline,
+        "core_problem": result.core_problem,
+        "market_gap": result.market_gap,
+        "features": json.dumps([f.dict() for f in result.features]),
+        "target_audience": result.target_audience,
+        "differentiation": result.differentiation,
+        "risk": result.risk,
+        "risk_level": result.risk_level,
+        "hypothesis_check": result.hypothesis_check,
+        "hypothesis_alignment": result.hypothesis_alignment,
+        "total_demand": result.total_demand,
+        "apps_analyzed": result.apps_analyzed,
+        "sources": json.dumps([s.dict() for s in result.sources]),
+    })).fetchone()
+    await db.commit()
+    return str(row.id)
+
+
+@router.get("/briefs", response_model=List[SavedBriefMeta])
+async def list_briefs(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (await db.execute(text("""
+        SELECT id, created_at, mode, scope, industry, user_hypothesis,
+               product_name, tagline, risk_level, total_demand, apps_analyzed
+        FROM innovation_briefs
+        WHERE user_id = :uid
+        ORDER BY created_at DESC
+        LIMIT 50
+    """), {"uid": current_user.id})).fetchall()
+    return [
+        SavedBriefMeta(
+            id=str(r.id),
+            created_at=r.created_at.isoformat(),
+            mode=r.mode,
+            scope=r.scope,
+            product_name=r.product_name,
+            tagline=r.tagline,
+            risk_level=r.risk_level,
+            total_demand=r.total_demand,
+            apps_analyzed=r.apps_analyzed,
+            user_hypothesis=r.user_hypothesis,
+            industry=r.industry,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/briefs/{brief_id}", response_model=SavedBriefFull)
+async def get_brief(
+    brief_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    row = (await db.execute(text("""
+        SELECT * FROM innovation_briefs WHERE id = :id AND user_id = :uid
+    """), {"id": brief_id, "uid": current_user.id})).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Brief nicht gefunden.")
+    return SavedBriefFull(
+        id=str(row.id),
+        created_at=row.created_at.isoformat(),
+        mode=row.mode,
+        scope=row.scope,
+        industry=row.industry,
+        user_hypothesis=row.user_hypothesis,
+        product_name=row.product_name,
+        tagline=row.tagline or "",
+        core_problem=row.core_problem or "",
+        market_gap=row.market_gap or "",
+        features=[ProductFeature(**f) for f in (row.features or [])],
+        target_audience=row.target_audience or "",
+        differentiation=row.differentiation or "",
+        risk=row.risk or "",
+        risk_level=row.risk_level or "mittel",
+        hypothesis_check=row.hypothesis_check,
+        hypothesis_alignment=row.hypothesis_alignment,
+        total_demand=row.total_demand or 0,
+        apps_analyzed=row.apps_analyzed or 0,
+        sources=[FeatureSignal(**s) for s in (row.sources or [])],
+    )
+
+
+@router.delete("/briefs/{brief_id}", status_code=204)
+async def delete_brief(
+    brief_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    await db.execute(text("""
+        DELETE FROM innovation_briefs WHERE id = :id AND user_id = :uid
+    """), {"id": brief_id, "uid": current_user.id})
+    await db.commit()
+
+
+@router.post("/generate", response_model=SavedBriefFull)
 async def generate_innovation_brief(
     body: InnovationRequest,
     db: AsyncSession = Depends(get_db),
@@ -281,7 +429,7 @@ async def generate_innovation_brief(
 
     total_demand = sum(s["fr_mentions"] for s in signals[:10])
 
-    return InnovationBrief(
+    result = InnovationBrief(
         product_name=brief.get("product_name", "Unbekannt"),
         tagline=brief.get("tagline", ""),
         core_problem=brief.get("core_problem", ""),
@@ -313,4 +461,16 @@ async def generate_innovation_brief(
             )
             for s in signals[:15]
         ],
+    )
+
+    saved_id = await _save_brief(db, current_user.id, body, result)
+
+    return SavedBriefFull(
+        id=saved_id,
+        created_at="",
+        mode=body.mode,
+        scope=body.scope,
+        industry=body.industry,
+        user_hypothesis=body.user_hypothesis,
+        **result.dict(),
     )
