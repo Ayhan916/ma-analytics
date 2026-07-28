@@ -30,10 +30,12 @@ logs/
 .idea/
 *.swp
 
-# ML model cache (large binary files)
+# ML model cache (large binary files — never commit)
 *.bin
 *.safetensors
+*.state_dict
 .cache/
+backend/checkpoints/
 
 # Test artifacts
 .pytest_cache/
