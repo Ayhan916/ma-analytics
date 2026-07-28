@@ -316,7 +316,7 @@ export const localMarketsApi = {
     const { data } = await apiClient.get('/local/categories')
     return data as { categories: string[]; radius_options: number[] }
   },
-  search: async (params: { postal_code: string; radius_km: number; category: string; max_results?: number }) => {
+  search: async (params: { postal_code: string; radius_km: number; category: string; keyword?: string; max_results?: number }) => {
     const { data } = await apiClient.post('/local/search', params)
     return data as BusinessItem[]
   },

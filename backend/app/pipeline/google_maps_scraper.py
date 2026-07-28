@@ -76,12 +76,18 @@ def search_businesses(
     radius_km: int,
     category: str,
     max_results: int = 20,
+    keyword: str = "",
 ) -> List[BusinessResult]:
     """Search Google Maps for businesses near a postal code."""
     from playwright.sync_api import sync_playwright
 
     results: List[BusinessResult] = []
-    query = f"{category} {postal_code} Deutschland"
+    parts = [category]
+    if keyword:
+        parts.append(keyword)
+    parts.append(postal_code)
+    parts.append("Deutschland")
+    query = " ".join(parts)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])

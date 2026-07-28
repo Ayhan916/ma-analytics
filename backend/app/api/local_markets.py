@@ -30,9 +30,10 @@ CATEGORIES = [
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class SearchRequest(BaseModel):
-    postal_code: str = Field(..., min_length=4, max_length=10)
+    postal_code: str = Field(..., min_length=2, max_length=100)
     radius_km: int = Field(5, ge=1, le=50)
     category: str
+    keyword: str = Field("", max_length=100)
     max_results: int = Field(20, ge=1, le=50)
 
 
@@ -93,6 +94,7 @@ async def search_businesses_endpoint(
             body.radius_km,
             body.category,
             body.max_results,
+            body.keyword,
         )
     except Exception as exc:
         log.error("maps_search_endpoint_failed", error=str(exc))

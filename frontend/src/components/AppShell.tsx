@@ -1,23 +1,35 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb, MapPin } from 'lucide-react'
+import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb, MapPin, Store } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 interface NavItem { icon: React.ElementType; label: string; to: string }
 
-const NAV: NavItem[] = [
-  { icon: LayoutDashboard, label: 'Dashboard',    to: '/' },
-  { icon: Database,        label: 'Data Sources', to: '/datasources' },
-  { icon: Search,          label: 'Search',       to: '/search' },
-  { icon: Inbox,           label: 'Inbox',        to: '/inbox' },
-  { icon: Kanban,          label: 'Kanban',       to: '/kanban' },
-  { icon: Lightbulb,       label: 'Innovation Lab', to: '/innovation' },
-  { icon: MapPin,          label: 'Lokale Märkte',  to: '/local' },
+const APP_NAV: NavItem[] = [
+  { icon: LayoutDashboard, label: 'Dashboard',     to: '/' },
+  { icon: Database,        label: 'Data Sources',  to: '/datasources' },
+  { icon: Search,          label: 'Search',        to: '/search' },
+  { icon: Lightbulb,       label: 'Innovation Lab',to: '/innovation' },
+  { icon: Inbox,           label: 'Inbox',         to: '/inbox' },
+  { icon: Kanban,          label: 'Kanban',        to: '/kanban' },
 ]
+
+const LOCAL_NAV: NavItem[] = [
+  { icon: Store,           label: 'Betriebe',      to: '/local' },
+]
+
+function NavSection({ label, collapsed }: { label: string; collapsed: boolean }) {
+  if (collapsed) return <div className="mx-2 my-2 border-t border-white/[0.06]" />
+  return (
+    <div className="px-3 pt-4 pb-1.5">
+      <span className="text-[10px] font-semibold tracking-widest text-slate-500 uppercase">{label}</span>
+    </div>
+  )
+}
 
 function NavLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
   const { pathname } = useLocation()
-  const active = pathname === item.to
+  const active = pathname === item.to || (item.to !== '/' && pathname.startsWith(item.to))
   const Icon = item.icon
   return (
     <Link
@@ -59,8 +71,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
-          {NAV.map(item => <NavLink key={item.to} item={item} collapsed={collapsed} />)}
+        <nav className="flex-1 overflow-y-auto py-2 px-2">
+          <NavSection label="App Analytics" collapsed={collapsed} />
+          <div className="space-y-0.5">
+            {APP_NAV.map(item => <NavLink key={item.to} item={item} collapsed={collapsed} />)}
+          </div>
+
+          <NavSection label="Lokale Märkte" collapsed={collapsed} />
+          <div className="space-y-0.5">
+            {LOCAL_NAV.map(item => <NavLink key={item.to} item={item} collapsed={collapsed} />)}
+          </div>
         </nav>
 
         {/* Footer */}
