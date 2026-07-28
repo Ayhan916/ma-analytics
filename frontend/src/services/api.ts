@@ -291,6 +291,45 @@ export const innovationApi = {
   },
 }
 
+// Local Markets
+export interface BusinessItem {
+  name: string
+  maps_url: string
+  place_id: string
+  address: string
+  rating: number
+  review_count: number
+  category: string
+}
+
+export interface LocalDatasourceItem {
+  id: string
+  name: string
+  address: string
+  maps_url: string
+  created_at: string
+  last_synced: string | null
+}
+
+export const localMarketsApi = {
+  categories: async () => {
+    const { data } = await apiClient.get('/local/categories')
+    return data as { categories: string[]; radius_options: number[] }
+  },
+  search: async (params: { postal_code: string; radius_km: number; category: string; max_results?: number }) => {
+    const { data } = await apiClient.post('/local/search', params)
+    return data as BusinessItem[]
+  },
+  analyze: async (businesses: BusinessItem[], max_reviews_per_business = 200) => {
+    const { data } = await apiClient.post('/local/analyze', { businesses, max_reviews_per_business })
+    return data as { datasource_ids: string[]; job_ids: string[] }
+  },
+  listDatasources: async () => {
+    const { data } = await apiClient.get('/local/datasources')
+    return data as LocalDatasourceItem[]
+  },
+}
+
 // Messages
 export const messagesApi = {
   list: async (sentiment?: string) => {

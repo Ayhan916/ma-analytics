@@ -11,6 +11,7 @@ import enum
 class DataSourceType(str, enum.Enum):
     google_play = "google_play"
     csv = "csv"
+    google_maps = "google_maps"
 
 
 class DataSource(Base):

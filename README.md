@@ -27,6 +27,7 @@ MA Analytics scrapes and analyses Google Play reviews from automotive manufactur
 | **Document Intelligence** | Upload PDFs (CSDDD, CSRD), extract metrics, Q&A via RAG |
 | **Inbox** | Customer message management with AI reply generation |
 | **Kanban** | Ticket management (Backlog → Todo → In Progress → Done) |
+| **Lokale Märkte** | Google Maps review scraping — search by PLZ + radius + category, select businesses, trigger ML pipeline |
 | **Settings** | Profile, password, notification preferences |
 
 ---
@@ -87,6 +88,8 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
 
 > **ML Model:** The ABSA model (`pyabsa multilingual`) is downloaded automatically on first pipeline run (~300MB, cached in `~/.cache/pyabsa/`). No manual download required.
 
+> **Playwright (Lokale Märkte):** After installing requirements, run `playwright install chromium` once to download the Chromium browser used for Google Maps scraping.
+
 ### 4. Frontend
 
 ```bash
@@ -141,6 +144,7 @@ MA-Analytics/
 │   │   │   ├── datasources.py    # App CRUD, CSV upload, scrape trigger
 │   │   │   ├── innovation.py     # Innovation Lab — full feature module
 │   │   │   ├── intelligence.py   # Document upload, RAG Q&A, metric extraction
+│   │   │   ├── local_markets.py  # Lokale Märkte — Google Maps search + analyze
 │   │   │   ├── jobs.py           # Pipeline job status polling
 │   │   │   ├── messages.py       # Inbox — message management + AI reply
 │   │   │   ├── search.py         # Hybrid search (vector + full-text + RRF)
@@ -153,10 +157,11 @@ MA-Analytics/
 │   │   │   └── security.py       # JWT creation/verification, password hashing
 │   │   ├── models/               # SQLAlchemy ORM models
 │   │   ├── pipeline/
-│   │   │   ├── celery_app.py     # Celery config + broker
-│   │   │   ├── tasks.py          # Main pipeline task (scrape → ML → store)
-│   │   │   ├── ml.py             # Embedding model, sentiment, clustering
-│   │   │   └── intelligence.py   # Document chunking, embedding, metric extraction
+│   │   │   ├── celery_app.py           # Celery config + broker
+│   │   │   ├── tasks.py                # Pipeline tasks (Google Play, Google Maps, ML)
+│   │   │   ├── ml.py                   # Embedding model, sentiment, clustering
+│   │   │   ├── intelligence.py         # Document chunking, embedding, metric extraction
+│   │   │   └── google_maps_scraper.py  # Playwright scraper: search_businesses + scrape_reviews
 │   │   └── main.py               # FastAPI app factory, router registration, CORS
 │   ├── alembic/versions/         # Database migration history
 │   ├── tests/                    # Unit + integration tests
@@ -168,6 +173,7 @@ MA-Analytics/
 │       │   ├── DataSourcesPage.tsx
 │       │   ├── AppDetailPage.tsx
 │       │   ├── InnovationLabPage.tsx   # Innovation Lab — main UI
+│       │   ├── LocalMarketsPage.tsx    # Lokale Märkte — Maps search + analyze
 │       │   ├── SearchPage.tsx
 │       │   ├── InboxPage.tsx
 │       │   ├── KanbanPage.tsx
@@ -217,6 +223,10 @@ Key endpoint groups:
 - `POST /innovation/briefs/{id}/generate-concept` — Long-form concept
 - `POST /search/` — Hybrid semantic + full-text search
 - `POST /intelligence/*` — Document upload + Q&A
+- `GET /local/categories` — Available categories + radius options
+- `POST /local/search` — Search Google Maps businesses by PLZ + category
+- `POST /local/analyze` — Create datasources + queue pipeline for selected businesses
+- `GET /local/datasources` — List all google_maps datasources
 
 ---
 

@@ -13,6 +13,7 @@ import { InboxPage } from './pages/InboxPage'
 import { KanbanPage } from './pages/KanbanPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { InnovationLabPage } from './pages/InnovationLabPage'
+import { LocalMarketsPage } from './pages/LocalMarketsPage'
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/kanban" element={<ProtectedRoute><KanbanPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/innovation" element={<ProtectedRoute><InnovationLabPage /></ProtectedRoute>} />
+          <Route path="/local" element={<ProtectedRoute><LocalMarketsPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

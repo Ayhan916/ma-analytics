@@ -749,6 +749,84 @@ def scrape_and_run(self, job_id: str, datasource_id: str, app_id: str, count: in
 
 @celery_app.task(
     bind=True,
+    name="app.pipeline.tasks.scrape_maps_and_run",
+    max_retries=2,
+    default_retry_delay=60,
+    time_limit=7200,
+    soft_time_limit=6900,
+)
+def scrape_maps_and_run(self, job_id: str, datasource_id: str, maps_url: str, max_reviews: int = 200):
+    """Scrape Google Maps reviews for a business and run the full ML pipeline."""
+    from app.pipeline.google_maps_scraper import scrape_reviews, MapReview
+
+    db = SessionLocal()
+    try:
+        _update_job(db, job_id, JobStatus.running, "scraping_maps")
+
+        ds = db.query(DataSource).filter(DataSource.id == datasource_id).first()
+        if not ds:
+            _update_job(db, job_id, JobStatus.failed, error="DataSource not found.")
+            return
+
+        existing_ids: set[str] = {
+            row.external_id
+            for row in db.query(Review.external_id)
+            .filter(Review.datasource_id == datasource_id, Review.external_id.isnot(None))
+            .all()
+        }
+
+        log.info("maps_scrape_task_start", datasource_id=datasource_id, url=maps_url, max=max_reviews)
+        raw: list[MapReview] = scrape_reviews(maps_url, max_reviews=max_reviews)
+
+        new_reviews: list[Review] = []
+        for r in raw:
+            if r.external_id and r.external_id in existing_ids:
+                continue
+            if not r.text:
+                continue
+            new_reviews.append(Review(
+                id=str(uuid.uuid4()),
+                datasource_id=datasource_id,
+                external_id=r.external_id or None,
+                content=r.text,
+                score=r.rating or None,
+                version=None,
+                version_source=None,
+                reviewed_at=None,
+                reply_content=None,
+                reply_at=None,
+            ))
+            if r.external_id:
+                existing_ids.add(r.external_id)
+
+        if not new_reviews and not existing_ids:
+            _update_job(db, job_id, JobStatus.failed, error="No reviews found on this Maps page.")
+            return
+
+        _update_job(db, job_id, JobStatus.running, f"saving_{len(new_reviews)}_reviews")
+        for review in new_reviews:
+            db.add(review)
+        db.commit()
+        log.info("maps_scrape_done", new=len(new_reviews))
+
+        _run_ml_pipeline(db, job_id, datasource_id)
+
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        log.warning("maps_task_timeout", job_id=job_id)
+        _update_job(db, job_id, JobStatus.failed, error="Task exceeded time limit and was stopped.")
+        raise
+    except Exception as exc:
+        db.rollback()
+        log.exception("maps_task_failed", job_id=job_id, error=str(exc))
+        _update_job(db, job_id, JobStatus.failed, error=str(exc))
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
     name="app.pipeline.tasks.backfill_replies",
     max_retries=2,
     default_retry_delay=60,
