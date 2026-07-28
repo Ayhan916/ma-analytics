@@ -328,6 +328,41 @@ export const localMarketsApi = {
     const { data } = await apiClient.get('/local/datasources')
     return data as LocalDatasourceItem[]
   },
+  dashboard: async () => {
+    const { data } = await apiClient.get('/local/dashboard')
+    return data as LocalDashboardResponse
+  },
+  generateBestPractice: async (datasource_ids: string[], focus = '') => {
+    const { data } = await apiClient.post('/local/best-practice/generate', { datasource_ids, focus })
+    return data as { report: string; generated_at: string }
+  },
+}
+
+export interface SignalSummary {
+  feature: string
+  count: number
+  signal_type: string
+  businesses_count: number
+}
+
+export interface BusinessDashboardItem {
+  id: string
+  name: string
+  maps_url: string
+  review_count: number
+  avg_rating: number | null
+  sentiment_positive: number
+  sentiment_negative: number
+  sentiment_neutral: number
+  top_signals: SignalSummary[]
+  job_status: string | null
+}
+
+export interface LocalDashboardResponse {
+  total_businesses: number
+  total_reviews: number
+  businesses: BusinessDashboardItem[]
+  cross_signals: SignalSummary[]
 }
 
 // Messages

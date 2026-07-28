@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb, MapPin, Store } from 'lucide-react'
+import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb, Store } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 interface NavItem { icon: React.ElementType; label: string; to: string }
@@ -15,7 +15,9 @@ const APP_NAV: NavItem[] = [
 ]
 
 const LOCAL_NAV: NavItem[] = [
-  { icon: Store,           label: 'Betriebe',      to: '/local' },
+  { icon: LayoutDashboard, label: 'Dashboard',        to: '/local/dashboard' },
+  { icon: Store,           label: 'Betriebe',         to: '/local' },
+  { icon: Lightbulb,       label: 'Best Practice Lab',to: '/local/best-practice' },
 ]
 
 function NavSection({ label, collapsed }: { label: string; collapsed: boolean }) {
