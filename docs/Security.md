@@ -12,16 +12,16 @@ MA Analytics is a **single-tenant SaaS with strict data isolation**. Each user a
 2. **Authentication** — Credentials must be protected; sessions must be stateless and time-bounded
 3. **Input validation** — All inputs are untrusted; validation happens at every layer
 4. **Dependency security** — Third-party libraries are attack surface; they must be reviewed and pinned
-5. **Infrastructure security** — The server, database, and cache must not be directly accessible from the internet
-6. **Secret management** — API keys, DB credentials, JWT secrets must never appear in code or logs
+5. **Secret management** — API keys (JWT secret, Anthropic, Groq, Resend), DB credentials must never appear in code or logs
+6. **Infrastructure security** — Database and cache must not be directly accessible from the internet
 
 ---
 
 ## 2. Authentication Architecture
 
-### 2.1 JWT-Based Stateless Authentication
+### 2.1 JWT-Based Stateless Authentication with HTTP-Only Cookies
 
-MA Analytics uses **JSON Web Tokens (JWT)** for stateless authentication. There is no server-side session store.
+MA Analytics uses **JSON Web Tokens (JWT)** stored as **HTTP-only cookies**. There is no server-side session store.
 
 **Token structure:**
 ```json
@@ -29,19 +29,33 @@ Header: {"alg": "HS256", "typ": "JWT"}
 
 Payload: {
   "sub": "3bd9dccc-36fb-4373-8f0f-19eef6ae56ed",  // user.id
-  "exp": 1753228800  // Unix timestamp: 24 hours from issue
+  "exp": 1753228800  // Unix timestamp
 }
 
 Signature: HMAC-SHA256(base64url(header) + "." + base64url(payload), SECRET_KEY)
 ```
 
-**Why HS256:** Symmetric signing is appropriate for single-service deployments where all token verification happens in the same service. If multiple services need to verify tokens independently, migrate to RS256 (asymmetric) — tracked as Phase 2 item.
+**Token types:**
 
-**Token lifetime:** 24 hours. No refresh tokens in v1.0 (users re-authenticate daily). Refresh tokens (with 30-day sliding window) are Phase 1.5.
+| Token | Cookie Name | Lifetime | HttpOnly | SameSite |
+|-------|------------|---------|---------|---------|
+| Access token | `access_token` | 15 minutes | ✅ Yes | Strict |
+| Refresh token | `refresh_token` | 7 days | ✅ Yes | Strict |
 
-**Token storage (frontend):** `localStorage`. Trade-off: localStorage is accessible to JavaScript (XSS risk) but is simpler than httpOnly cookies, which require CSRF protection. Given MA Analytics is not embedded in other pages and has strong CSP headers, localStorage is acceptable for v1.0. `httpOnly` cookies are Phase 2.
+**Token refresh flow:**
+1. `access_token` expires → API returns 401
+2. `apiClient` interceptor detects 401 → calls `POST /auth/refresh` (using refresh token cookie)
+3. Server issues new access token → sets new cookie
+4. Retry original request
+5. If refresh also returns 401 → redirect to `/login`
 
-**Token invalidation:** Not supported in v1.0 (stateless, no blocklist). Tokens expire naturally. For logout: client deletes token from localStorage. This means a stolen token is valid until expiry — mitigated by short (24h) lifetime and HTTPS enforcement.
+**Critical implementation note:** `login()` and `register()` must use `authAxios` (a separate axios instance with no interceptors). Using `apiClient` for auth endpoints would cause an infinite redirect loop when a 401 is returned during refresh.
+
+**Why HTTP-only cookies over localStorage:**
+- HTTP-only cookies are inaccessible to JavaScript — XSS attacks cannot steal them
+- `SameSite: Strict` prevents CSRF attacks (cookie is never sent to third-party origins)
+- Refresh token pattern enables seamless 7-day sessions without re-login
+- The dual-instance axios pattern (`apiClient` with interceptors vs `authAxios` without) handles the logout loop edge case cleanly
 
 ### 2.2 Password Security
 
@@ -49,21 +63,18 @@ Signature: HMAC-SHA256(base64url(header) + "." + base64url(payload), SECRET_KEY)
 
 **Why bcrypt:**
 - Adaptive: cost factor can be increased as hardware improves
-- GPU-resistant by design: memory-intensive, not parallelizable
-- 72-byte effective input (pre-hashing not needed at our password length requirements)
+- GPU-resistant: memory-intensive, not parallelizable
 - NIST SP 800-63B compliant
 
-**Cost factor 12:** Produces a hash in ~300ms on a modern server. This means brute-force requires 300ms per attempt — renders offline attacks against bcrypt hashes impractical at scale.
+**Cost factor 12:** ~300ms hash time on a modern server. Makes offline brute-force attacks against stolen hashes impractical.
 
 **Minimum length:** 8 characters, enforced server-side (client-side validation is UX, not security).
 
-**Maximum effective length:** bcrypt truncates at 72 bytes. Users writing passwords >72 characters (extremely rare) get no additional security from the extra characters. No current mitigations needed; document for future awareness.
+**Version pinning:** `bcrypt==4.0.1`. bcrypt ≥ 4.1 breaks passlib 1.7.4 compatibility — a known upstream issue, accepted and documented.
 
-**Version pinning:** `bcrypt==4.0.1` (see `requirements.txt`). bcrypt ≥ 4.1 breaks passlib 1.7.4 compatibility. This is a known upstream issue.
+### 2.3 Protected Endpoint Pattern
 
-### 2.3 Dependency: `get_current_user`
-
-Every protected endpoint uses:
+Every protected endpoint uses `Depends(get_current_user)`:
 
 ```python
 async def get_current_user(
@@ -85,12 +96,12 @@ async def get_current_user(
 ```
 
 This dependency:
-1. Extracts the Bearer token from `Authorization` header
+1. Extracts the token from the `access_token` cookie
 2. Validates signature and expiry
 3. Loads the user from the database
 4. Raises HTTP 401 if any step fails
 
-**Critical:** The DB lookup on every request confirms the user still exists (accounts can't be deleted but this pattern is correct for future account deletion support).
+The DB lookup confirms the user still exists on every request — necessary for future account deletion support.
 
 ---
 
@@ -98,7 +109,7 @@ This dependency:
 
 ### 3.1 User-Scoped Queries
 
-Every query that returns user data includes the current user as a filter:
+**Rule:** Every query that returns user-sensitive data (datasources, reviews, signals, briefs, tickets, messages) MUST include `user_id == current_user.id` as a predicate.
 
 ```python
 # CORRECT — always filter by current user
@@ -112,37 +123,36 @@ result = await db.execute(
 )
 ```
 
-**Rule:** No query that returns user-sensitive data (datasources, reviews, clusters, tickets, messages) is allowed to omit the `user_id == current_user.id` predicate.
+The Innovation Lab's `_aggregate_signals`, `_aggregate_signals_hypothesis`, `_compute_signal_graph`, and `_get_excluded_signals` functions all include the user scope via a `WHERE` clause that references `datasources.user_id = :uid`. This scope is injected as the `where` clause parameter and cannot be bypassed by request body manipulation.
 
 ### 3.2 Resource Ownership Validation
 
-For operations on specific resources (e.g., `DELETE /datasources/{id}`):
+For operations on specific resources (DELETE, PATCH on specific IDs):
 
 ```python
 # Load with ownership check in single query
-ds = await db.execute(
+result = await db.execute(
     select(DataSource).where(
         DataSource.id == datasource_id,
         DataSource.user_id == current_user.id  # ownership check
     )
 )
-if not ds:
+if not result.scalar_one_or_none():
     raise HTTPException(status_code=404, detail="DataSource not found")
 ```
 
-**Important:** Return 404 (not 403) when a resource exists but belongs to another user. This prevents user enumeration — an attacker cannot distinguish "resource doesn't exist" from "resource exists but you don't own it."
+**Important:** Return 404 (not 403) when a resource exists but belongs to another user. This prevents user enumeration — an attacker cannot distinguish "doesn't exist" from "exists but not yours."
 
 ### 3.3 Public Endpoints
 
-The following endpoints are intentionally public (no auth required):
-
 | Endpoint | Reason |
 |----------|--------|
-| `GET /health` | Load balancer health checks must not require auth |
+| `GET /health` | Load balancer health checks require no auth |
 | `POST /auth/register` | Must be accessible before account creation |
 | `POST /auth/login` | Must be accessible before token exists |
+| `POST /auth/refresh` | Must be accessible to refresh expired access tokens |
 
-**All other endpoints** require a valid Bearer token.
+**All other endpoints** require a valid access token.
 
 ---
 
@@ -150,89 +160,104 @@ The following endpoints are intentionally public (no auth required):
 
 ### 4.1 Pydantic Schemas
 
-All request bodies are validated by Pydantic models before any processing:
+All request bodies are validated by Pydantic v2 models before processing:
 
 ```python
-class RegisterRequest(BaseModel):
-    email: EmailStr      # validates email format
-    password: str        # custom validator: min 8 chars
-    full_name: str | None = None
-
-    @validator("password")
-    def password_min_length(cls, v):
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        return v
+class InnovationRequest(BaseModel):
+    mode: str
+    scope: str
+    industry: Optional[str] = None
+    datasource_ids: Optional[List[str]] = None
+    market: Optional[str] = None
+    user_hypothesis: Optional[str] = None
+    excluded_signals: Optional[List[str]] = None  # null=auto, []=none, [...]= manual
 ```
 
-**What Pydantic validates:**
-- Type correctness (str, int, float, bool)
-- Email format (`EmailStr`)
-- Enum values (only valid `TicketStatus`, `TicketPriority` values accepted)
-- Required fields present
+Pydantic validates: type correctness, required fields, enum values. Business rules (e.g., "scope='industry' requires industry field") are validated at the service layer.
 
-**What Pydantic does NOT validate:** Business rules (e.g., "email must be unique") — these are database-level constraints enforced at the query layer.
-
-### 4.2 File Upload Validation (CSV)
+### 4.2 File Upload Validation (CSV, PDF)
 
 ```python
 # Size check before processing
 if file.size > 10 * 1024 * 1024:  # 10MB
     raise HTTPException(400, "File too large")
 
-# Content type check
+# Extension check
 if not file.filename.endswith('.csv'):
     raise HTTPException(400, "Only CSV files accepted")
 ```
 
-**No server-side MIME type sniffing** — we trust the filename extension AND parse the file as CSV. If parsing fails, a 400 is returned.
+PDF uploads for Document Intelligence use a similar pattern with `.pdf` extension check.
 
-### 4.3 Path Parameter Validation
+### 4.3 SQL Injection Prevention
 
-FastAPI validates path parameters against declared types. A UUID path like `/datasources/{datasource_id}` where the Python type is `str` accepts any string. For additional validation in critical paths, the ownership check (`WHERE id = $1 AND user_id = $2`) acts as a filter.
-
-### 4.4 SQL Injection Prevention
-
-All database queries use **parameterized queries via SQLAlchemy**. No string interpolation is used in SQL construction:
+All database queries use **SQLAlchemy parameterized queries**. Raw SQL uses `text()` with named parameters:
 
 ```python
 # SAFE — parameterized
-await db.execute(select(User).where(User.email == email))
+sql = text("""
+    SELECT feature, COUNT(*) AS total
+    FROM review_signals rs
+    JOIN datasources ds ON rs.datasource_id = ds.id
+    WHERE ds.user_id = :uid
+    GROUP BY feature
+""")
+await db.execute(sql, {"uid": current_user.id})
 
 # UNSAFE — never do this
-await db.execute(f"SELECT * FROM users WHERE email = '{email}'")
+f"SELECT * FROM review_signals WHERE user_id = '{user_id}'"
 ```
 
-SQLAlchemy's ORM and Core expression language always produce parameterized queries. Raw SQL is not used anywhere in the codebase.
+The signal exclusion list in `_aggregate_signals` uses dynamic parameter binding, not f-strings:
+
+```python
+if exclude_features:
+    keys = {f"excl_{i}": f for i, f in enumerate(exclude_features)}
+    clause = "AND rs.feature NOT IN (" + ", ".join(f":{k}" for k in keys) + ")"
+    params.update(keys)
+```
+
+### 4.4 User Hypothesis Validation
+
+The `user_hypothesis` field is user-controlled text that gets embedded and used in SQL as a vector parameter. It is never directly interpolated into SQL. The embedding step produces a numeric vector; the SQL uses `CAST(:hyp_vec AS vector)` where `hyp_vec` is `str(list_of_floats)` — a controlled representation with no injection surface.
+
+### 4.5 AI Prompt Injection Defense
+
+User-provided content (hypotheses, chat messages) is included in AI prompts. Mitigations:
+- Hypothesis text is only used for vector embedding, not directly in the main generation prompt
+- Chat messages are clearly delimited as user content vs. system context
+- Brief generation uses `HIER_ECHTER_PRODUKTNAME` style placeholders in the schema definition to prevent the model from copying instruction text as output
+- The JSON schema is fixed and returned content is validated structurally before persistence
 
 ---
 
 ## 5. Rate Limiting
 
-Rate limiting is implemented via `slowapi` (a FastAPI wrapper around the `limits` library).
+Rate limiting via `slowapi` (FastAPI wrapper around `limits`).
 
 ### 5.1 Current Limits
 
 | Endpoint | Limit | Reason |
 |----------|-------|--------|
 | `POST /auth/register` | 10/minute per IP | Prevent account creation floods |
-| `POST /auth/login` | 20/minute per IP | Prevent brute-force attacks |
+| `POST /auth/login` | 20/minute per IP | Prevent credential stuffing |
 | All other endpoints | 200/minute per IP | General API abuse prevention |
 
-### 5.2 Rate Limit Exceeded Response
+### 5.2 Rate Limit Response
 
 ```http
 HTTP/1.1 429 Too Many Requests
-Content-Type: application/json
-
 {"error": "Rate limit exceeded: 10 per 1 minute"}
 ```
 
-### 5.3 Future: Per-User Rate Limits
+### 5.3 AI Provider Rate Limits
 
-The current implementation limits by IP, which is correct for unauthenticated endpoints (register/login). For authenticated endpoints, the limit should be per user ID — a user behind a corporate NAT shares an IP with many colleagues.
+The Innovation Lab handles external AI rate limits separately:
 
-**Phase 2 upgrade:** Change key function from `get_remote_address` to `get_user_id` for authenticated routes.
+- `_is_rate_limit(exc)` checks for `"429"`, `"rate_limit"`, `"overloaded"` in exception strings
+- Claude 429 → automatic Groq cascade fallback (no user-visible delay)
+- Groq key 1 exhausted → switch to Groq key 2
+- All providers exhausted → HTTP 429 returned to client with human-readable message
 
 ---
 
@@ -240,17 +265,14 @@ The current implementation limits by IP, which is correct for unauthenticated en
 
 ### 6.1 HTTPS Enforcement (Production)
 
-All production traffic must use TLS 1.2+. HTTP requests should be redirected to HTTPS.
+All production traffic must use TLS 1.2+. HTTP requests redirect to HTTPS.
 
-**Nginx / Caddy configuration:**
 ```nginx
-# Force HTTPS
 server {
     listen 80;
     return 301 https://$host$request_uri;
 }
 
-# HTTPS with TLS 1.2+
 server {
     listen 443 ssl;
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -265,30 +287,25 @@ server {
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,  # from .env, never "*" in production
-    allow_credentials=True,
+    allow_credentials=True,  # required for HTTP-only cookie transmission
     allow_methods=["*"],
     allow_headers=["*"],
 )
 ```
 
-**Development:** `ALLOWED_ORIGINS=["http://localhost:3002"]`
+**Development:** `ALLOWED_ORIGINS=["http://localhost:3002"]`  
 **Production:** `ALLOWED_ORIGINS=["https://your-domain.com"]`
 
-**Never use `"*"` in production** — this would allow any website to make authenticated requests using stored tokens.
+`allow_credentials=True` is required because the frontend transmits cookies with every request. Without it, the browser strips cookies from cross-origin requests.
 
-### 6.3 Security Headers (to add in Phase 2)
+**Never use `"*"` with `allow_credentials=True`** — this combination is rejected by browsers and would expose all cookies to any origin.
+
+### 6.3 Security Headers (Phase 2)
 
 ```nginx
-# Content Security Policy
 Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-
-# Prevent clickjacking
 X-Frame-Options: DENY
-
-# Prevent MIME sniffing
 X-Content-Type-Options: nosniff
-
-# Referrer policy
 Referrer-Policy: strict-origin-when-cross-origin
 ```
 
@@ -298,34 +315,45 @@ Referrer-Policy: strict-origin-when-cross-origin
 
 ### 7.1 Environment Variables
 
-All secrets are loaded from `.env` files via `pydantic-settings`. **No secrets are hardcoded in code.**
+All secrets are loaded via `pydantic-settings` from `.env`. **No secrets are hardcoded.**
 
 **Required secrets:**
 ```bash
 # JWT signing key — generate with: openssl rand -hex 32
 SECRET_KEY=<64-character-hex-string>
 
-# Database credentials
-DATABASE_URL=postgresql+asyncpg://user:password@host:port/dbname
+# Database connection (never expose publicly)
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5434/dbname
 
-# Optional: Groq API key
+# AI providers (at least one required for Innovation Lab)
+ANTHROPIC_API_KEY=sk-ant-...
 GROQ_API_KEY=gsk_...
+GROQ_API_KEY_2=gsk_...   # optional second key for fallback rotation
+
+# Email (required for password reset)
+RESEND_API_KEY=re_...
+```
+
+**Optional:**
+```bash
+# Override default Claude model
+ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+
+# Frontend
+VITE_API_URL=http://localhost:8000
 ```
 
 ### 7.2 Secret Generation
 
 ```bash
-# Generate SECRET_KEY
+# Generate SECRET_KEY (256-bit entropy)
 openssl rand -hex 32
-# Output: a0b1c2d3e4f5... (64 chars, 256 bits of entropy)
 
-# Default bcrypt passwords in dev: use ≥12 character passwords
+# Never use:
+# SECRET_KEY=changeme
+# SECRET_KEY=secret
+# Any default or reused value
 ```
-
-**Never use:**
-- `"changeme"` as SECRET_KEY in production
-- Default database passwords
-- Reused secrets across environments
 
 ### 7.3 .gitignore Rules
 
@@ -337,16 +365,17 @@ openssl rand -hex 32
 *.pem
 ```
 
-**Critical:** `.env` must never be committed. The repository contains `.env.example` with placeholder values and documentation.
+`.env` must never be committed. The repository contains `.env.example` with placeholder values.
 
 ### 7.4 Secrets in Logs
 
 structlog is configured to never log:
-- JWT tokens
-- Passwords
-- SECRET_KEY or database URLs
+- JWT tokens or cookie values
+- Passwords (even hashed)
+- `SECRET_KEY`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `RESEND_API_KEY`
+- IP addresses (used for rate limiting only, not persisted)
 
-**Rule:** Only log the `user_id`, never the `email` or any PII, in request logs. Log the X-Request-ID for correlation.
+Logged per request: `request_id` (X-Request-ID), `method`, `path`, `status`, `duration_ms`, `user_id` (never email).
 
 ---
 
@@ -356,33 +385,39 @@ structlog is configured to never log:
 
 | Actor | Capability | Primary Threat |
 |-------|-----------|----------------|
-| External attacker | Public internet access | Brute-force login, data exfiltration |
-| Competitor | Targeted | Review data scraping via authenticated API |
-| Malicious insider | Account exists | Access to other users' data |
-| Automated bot | High request volume | API abuse, account creation flood |
+| External attacker | Public internet access | Credential stuffing on /auth/login, session hijacking |
+| Competitor | Targeted | Review data exfiltration via authenticated API |
+| Malicious insider | Has account | Access to other users' Innovation Briefs |
+| Automated bot | High request volume | API abuse, Celery queue flooding |
+| Prompt injector | User input field | Manipulating AI outputs via hypothesis or chat input |
 
 ### 8.2 Threat Analysis (STRIDE)
 
 | Category | Threat | Mitigation |
 |----------|--------|-----------|
-| **Spoofing** | Impersonate another user | JWT signature verification; user_id from token, not from request |
-| **Tampering** | Modify database records | Parameterized queries; no direct DB access |
-| **Repudiation** | Deny performing action | Structured request logs with user_id + X-Request-ID |
-| **Info Disclosure** | Access another user's data | user_id filter on every query; 404 on unauthorized access |
-| **Info Disclosure** | Steal JWT token | HTTPS enforced; 24h expiry; httpOnly cookies in Phase 2 |
-| **Info Disclosure** | User enumeration via login | `401 Invalid credentials` for both wrong email AND wrong password |
-| **Denial of Service** | Overwhelm ML pipeline | Rate limiting; Celery queue absorbs load; auto-fail on timeout |
-| **Elevation of Privilege** | Gain admin access | No admin role in v1.0; all users are equal; future: RBAC |
+| **Spoofing** | Impersonate another user | JWT signature verification; user_id from token only, never from request body |
+| **Tampering** | Modify database records | Parameterized queries; ownership check on every mutation |
+| **Tampering** | Inject malicious SQL via hypothesis | Hypothesis is only embedded, never SQL-interpolated |
+| **Repudiation** | Deny performing action | structlog records user_id + X-Request-ID for every request |
+| **Info Disclosure** | Access another user's data | user_id filter on every query; 404 on unauthorized access (not 403) |
+| **Info Disclosure** | Steal session cookie | HTTP-only + SameSite:Strict; inaccessible to XSS; HTTPS required |
+| **Info Disclosure** | Steal Anthropic/Groq API keys | Keys only in .env, never logged, never returned by any endpoint |
+| **Info Disclosure** | User enumeration | 401 for both "wrong email" and "wrong password" — same error message |
+| **Denial of Service** | Flood Celery queue with pipeline jobs | Rate limiting + per-user datasource quota (enforced by DB) |
+| **Denial of Service** | Exhaust AI provider quota | Rate limiting; Groq fallback; hard 429 when all exhausted |
+| **Elevation of Privilege** | Gain admin access | No admin role in v1.0; all users are equal |
+| **Prompt Injection** | Manipulate brief generation via hypothesis | Hypothesis used for embedding only; not directly in generation prompt |
 
 ### 8.3 Known Limitations (Accepted Risks)
 
 | Risk | Severity | Accepted? | Rationale |
 |------|----------|-----------|-----------|
-| JWT tokens not revocable before expiry | Medium | ✅ Yes | 24h lifetime limits window; refresh tokens in Phase 2 |
+| No token revocation before expiry | Medium | ✅ Yes | 15-minute access token window is short; refresh tokens can be invalidated in Phase 2 |
 | No 2FA | Medium | ✅ Yes | Phase 2 — TOTP support planned |
-| Google Play scraping ToS compliance | Low | ✅ Yes | Public data; no authentication spoofing |
-| Celery broker (Redis) persistence | Low | ✅ Yes | Task loss on Redis crash is acceptable; user can retry |
-| No audit log | Medium | ⚠️ Deferred | Phase 2 — needed for enterprise customers |
+| No audit log | Medium | ⚠️ Deferred | Phase 3 — needed for enterprise; not blocking for v1.0 |
+| passlib 1.7.4 unmaintained | Low | ✅ Yes | No active CVEs; replacement with argon2-cffi tracked for Phase 2 |
+| No security headers | Low | ⚠️ Deferred | Phase 2; HSTS + CSP + X-Frame-Options ready to add |
+| Celery task loss on Redis crash | Low | ✅ Yes | User can retry; tasks are idempotent |
 
 ---
 
@@ -390,26 +425,41 @@ structlog is configured to never log:
 
 ### 9.1 Pinned Dependencies
 
-All dependencies are pinned to exact versions in `requirements.txt` and `package.json`. This prevents supply chain attacks where a package update introduces malicious code.
+All dependencies are pinned to exact versions:
 
 ```
 # requirements.txt
 fastapi==0.115.0
-sqlalchemy==2.0.36
-bcrypt==4.0.1    # pinned — see Security notes
+sqlalchemy==2.0.35
+bcrypt==4.0.1          # pinned — see password security notes
+anthropic>=0.120.0
+groq==1.0.0
+sentence-transformers==2.7.0
+torch==2.4.1
 ```
 
-### 9.2 Dependency Review Process (Phase 2)
+```json
+// package.json
+"react": "^18.3.1",
+"typescript": "^5.5.3",
+"vite": "^6.0.0"
+```
 
-- `pip audit` — checks Python dependencies against PyPI advisory database
-- `npm audit` — checks Node dependencies against npm advisory database
-- Run in CI on every PR
+### 9.2 Dependency Review Process
 
-### 9.3 Known Vulnerable Dependencies
+**Current:** Manual review when adding new dependencies.
+
+**Phase 2 (CI):**
+- `pip audit` — Python dependencies vs. PyPI advisory database
+- `npm audit` — Node dependencies vs. npm advisory database
+- Run on every PR before merge
+
+### 9.3 Known Dependency Notes
 
 | Package | Issue | Status |
 |---------|-------|--------|
 | passlib 1.7.4 | Unmaintained since 2020 | ⚠️ Accepted — no active CVEs; replace with `argon2-cffi` in Phase 2 |
+| bcrypt 4.0.1 | Pinned below latest due to passlib compat | ✅ Documented — acceptable constraint |
 
 ---
 
@@ -419,29 +469,34 @@ bcrypt==4.0.1    # pinned — see Security notes
 
 | Data Type | Source | Purpose | Legal Basis |
 |-----------|--------|---------|-------------|
-| User email | User-provided at registration | Authentication | Contract |
-| User password (hashed) | User-provided at registration | Authentication | Contract |
+| User email | Registration | Authentication | Contract |
+| User password (bcrypt hash) | Registration | Authentication | Contract |
 | App reviews | Google Play public data | Product analysis | Legitimate interest |
 | Customer messages | User-provided | Inbox feature | Contract |
+| Innovation Briefs | AI-generated + user data | Core product | Contract |
 
 ### 10.2 Data Retention
 
-- User data: retained until account deletion
-- Reviews/clusters: retained until data source deletion
-- Pipeline job logs: retained indefinitely (no PII)
+- User + associated data: retained until account deletion (`DELETE /auth/me` — Phase 1.5)
+- Reviews/clusters/signals: retained until datasource deletion
+- Innovation Briefs: retained until manually deleted or account deletion
+- Pipeline job logs: no PII, retained indefinitely
 
 ### 10.3 Right to Erasure (GDPR Art. 17)
 
-**v1.0 status:** Cascade delete via `DELETE /datasources/{id}` removes reviews, clusters, jobs. No account deletion endpoint yet.
+**Current status:** Datasource cascade-delete removes reviews, signals, clusters, jobs. Innovation briefs can be deleted manually. No account deletion endpoint yet.
 
-**Phase 1 requirement:** `DELETE /auth/me` → deletes user and all associated data (CASCADE DELETE already configured in schema).
+**Phase 1.5 requirement:** `DELETE /auth/me`:
+1. Sends confirmation email (Resend)
+2. User confirms via email link
+3. Cascade deletes: user → datasources → reviews → review_signals → review_sentences → review_aspects → clusters → innovation_briefs → messages → tickets → intelligence_documents → intelligence_chunks → pipeline_jobs
 
 ### 10.4 Data Minimization
 
-- No PII stored beyond what's necessary for core functionality
-- Customer messages store name and email only if explicitly provided
-- IP addresses are not stored (only used for rate limiting, not logged)
-- No analytics tracking, no third-party cookies
+- No PII stored beyond email + hashed password + explicitly user-provided data
+- Customer message names/emails only if user explicitly provides them
+- IP addresses not persisted (rate limiting only, in-memory)
+- No analytics tracking, no third-party cookies, no pixel tracking
 
 ---
 
@@ -451,15 +506,15 @@ bcrypt==4.0.1    # pinned — see Security notes
 
 | # | Vulnerability | Status |
 |---|--------------|--------|
-| A01 | Broken Access Control | ✅ Mitigated — user_id filter on all queries |
-| A02 | Cryptographic Failures | ✅ Mitigated — bcrypt, HS256 JWT, TLS in prod |
-| A03 | Injection | ✅ Mitigated — SQLAlchemy parameterized queries |
-| A04 | Insecure Design | ✅ Mitigated — threat model reviewed |
-| A05 | Security Misconfiguration | ⚠️ CORS set, API docs hidden in prod; headers Phase 2 |
-| A06 | Vulnerable Components | ⚠️ passlib unmaintained; pip audit in Phase 2 |
-| A07 | Auth & Session Failures | ✅ Mitigated — JWT 24h, bcrypt, rate limiting |
-| A08 | Software & Data Integrity | ⚠️ Pinned deps; no CI security scanning yet |
-| A09 | Logging & Monitoring | ✅ structlog JSON logging; alerting Phase 2 |
+| A01 | Broken Access Control | ✅ Mitigated — user_id filter on every query; 404 on unauthorized |
+| A02 | Cryptographic Failures | ✅ Mitigated — bcrypt, HS256 JWT, HTTP-only cookies, TLS in prod |
+| A03 | Injection | ✅ Mitigated — SQLAlchemy parameterized; dynamic exclusion lists use named params |
+| A04 | Insecure Design | ✅ Mitigated — threat model reviewed; ownership checks on mutations |
+| A05 | Security Misconfiguration | ⚠️ CORS set, docs hidden in prod; security headers are Phase 2 |
+| A06 | Vulnerable Components | ⚠️ passlib unmaintained; `pip audit` in Phase 2 CI |
+| A07 | Auth & Session Failures | ✅ Mitigated — JWT 15min, HTTP-only cookies, bcrypt, rate limiting |
+| A08 | Software & Data Integrity | ⚠️ Pinned deps; no automated scanning yet |
+| A09 | Logging & Monitoring | ✅ structlog JSON logging; Sentry alerting is Phase 4 |
 | A10 | Server-Side Request Forgery | ✅ Not applicable — no user-controlled URL fetching |
 
 ### Pre-Production Checklist
@@ -467,16 +522,18 @@ bcrypt==4.0.1    # pinned — see Security notes
 - [ ] `SECRET_KEY` generated with `openssl rand -hex 32` (not a default)
 - [ ] Database password is strong (≥24 chars, randomly generated)
 - [ ] HTTPS enforced with valid TLS certificate
-- [ ] `ALLOWED_ORIGINS` set to production domain only (not `*`)
-- [ ] `DEBUG=false` in production (API docs hidden)
-- [ ] `.env` file not in repository (`.gitignore` includes `.env`)
+- [ ] `ALLOWED_ORIGINS` set to production domain only (never `*`)
+- [ ] `DEBUG=false` in production (API docs hidden, no stack traces in responses)
+- [ ] `.env` file not in repository
 - [ ] Redis not exposed on public port
 - [ ] PostgreSQL not exposed on public port
+- [ ] `ANTHROPIC_API_KEY` and `GROQ_API_KEY` are production keys (not test keys)
 - [ ] Security headers configured in Nginx/Caddy
-- [ ] Rate limiting verified (test with curl)
+- [ ] Rate limiting verified with curl (`curl -X POST /auth/login` 25 times)
+- [ ] HTTP-only cookie set confirmed in browser DevTools (not visible in document.cookie)
 
 ---
 
-*Document Owner: Engineering / Security Architecture*
-*Last Updated: 2026-07*
-*Status: v1.0 — Production-ready security posture; Phase 2 items tracked*
+*Document Owner: Engineering / Security Architecture*  
+*Last Updated: 2026-07*  
+*Status: v1.0 — Production-ready security posture; Phase 2 items tracked above*

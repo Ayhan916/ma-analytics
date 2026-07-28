@@ -1,349 +1,282 @@
 # Architecture — MA Analytics
 
-> *"Good architecture makes the system easy to understand, easy to change, easy to test, and easy to deploy. Bad architecture makes all of these hard. The measure of architecture is not elegance — it is fitness for purpose over time."*
+## 1. System Overview
 
----
-
-## 1. Architectural Overview
-
-MA Analytics is a **multi-tier, event-driven SaaS application** built on a clean separation of concerns across four logical layers:
+MA Analytics is a multi-tier, event-driven SaaS application with three distinct intelligence layers: review signal extraction, innovation brief generation, and document RAG. Each layer is architecturally independent but shares the same persistence and embedding infrastructure.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        PRESENTATION                          │
-│              React 18 + TypeScript + Vite                    │
-│         (Dashboard, DataSources, Inbox, Kanban)              │
-└────────────────────────┬────────────────────────────────────┘
-                         │ HTTPS / REST (JSON)
-┌────────────────────────▼────────────────────────────────────┐
-│                      APPLICATION                             │
-│                  FastAPI (Python 3.9)                        │
-│          (Auth, DataSources, Dashboard, Tickets,             │
-│                   Messages, Jobs)                            │
-└──────────┬─────────────────────────────┬───────────────────┘
-           │ SQLAlchemy async             │ Celery .delay()
-           │ (asyncpg)                    │
-┌──────────▼───────────┐    ┌────────────▼───────────────────┐
-│      PERSISTENCE      │    │         COMPUTATION             │
-│   PostgreSQL 16       │    │    Celery Worker (Python)       │
-│   (users, reviews,   │    │    ├── Google Play Scraper      │
-│    tickets, clusters, │    │    ├── Text Preprocessing       │
-│    messages, jobs)    │    │    ├── Sentiment Analysis       │
-│                       │    │    ├── Sentence Embeddings      │
-│   Redis (Celery       │    │    ├── KMeans Clustering        │
-│   broker + backend)   │    │    └── LLM Summarization        │
-└───────────────────────┘    └────────────────────────────────┘
-```
-
----
-
-## 2. Architectural Principles
-
-### 2.1 Async-First API, Sync Worker
-
-The FastAPI application is **fully asynchronous** (asyncpg + SQLAlchemy async). This ensures the API server handles hundreds of concurrent requests without blocking — critical for a multi-tenant SaaS where users are polling job status every 4 seconds.
-
-The Celery worker is **synchronous** by design. ML inference (transformer models, KMeans) is CPU-bound, not I/O-bound. Using async in the worker would add complexity without benefit. The worker uses a standard psycopg2 SQLAlchemy session.
-
-**Key insight:** The wrong choice here is to use async everywhere. Mixing async and sync ML libraries (PyTorch, sentence-transformers) leads to event loop deadlocks. The architectural separation of concerns (async API ↔ sync worker) prevents this entire class of bugs.
-
-### 2.2 Single-Responsibility Routing
-
-Each router owns exactly one domain:
-
-```
-/auth        → authentication (tokens, identity)
-/datasources → data source lifecycle (create, list, delete)
-/jobs        → pipeline job status (read-only)
-/dashboard   → aggregated intelligence (read-only)
-/tickets     → ticket CRUD
-/messages    → message CRUD + AI generation
-```
-
-No cross-domain logic in routers. Business logic lives in services (Phase 2 refactor) or is inlined when simple enough to not warrant extraction.
-
-### 2.3 Event-Driven Pipeline
-
-The ML pipeline is **completely decoupled** from the HTTP request cycle. When a user connects a data source:
-
-1. FastAPI creates `DataSource` + `PipelineJob` records → **responds in <100ms**
-2. Celery task dispatched to Redis queue
-3. Worker picks up task, runs pipeline (30s–5min depending on review count)
-4. Frontend polls `GET /jobs/{id}` every 4 seconds
-5. When job is `done`, frontend navigates user to Dashboard
-
-This means: the API is never blocked by ML computation. Users get immediate feedback. The system degrades gracefully under load.
-
-### 2.4 Defense in Depth (Data Isolation)
-
-Every database query that touches user data includes `WHERE user_id = current_user.id`. This is enforced at the **query level**, not just at the application level.
-
-The dependency `get_current_user` extracts the authenticated user from the JWT on every protected request. No endpoint in the protected domain operates without this dependency.
-
----
-
-## 3. Component Diagram
-
-```
-Browser
-  │
-  │ HTTPS (dev: HTTP to Vite dev server)
-  ▼
-Nginx (production) / Vite Dev Server (development)
-  │
-  │ /api/* → proxy → Backend:8001
-  │ /*     → serve index.html (SPA routing)
-  ▼
-FastAPI App (uvicorn, port 8001)
-  ├── CORS Middleware
-  ├── Request Logging Middleware (structlog + X-Request-ID)
-  ├── Rate Limit Middleware (slowapi)
-  ├── Global Exception Handler
-  │
-  ├── Routers
-  │   ├── /health          → health check
-  │   ├── /auth/*          → register, login, me
-  │   ├── /datasources/*   → CRUD + trigger pipeline
-  │   ├── /jobs/*          → status polling
-  │   ├── /dashboard/*     → summary, issues, strengths, insight
-  │   ├── /tickets/*       → CRUD
-  │   └── /messages/*      → CRUD + generate-reply, generate-tickets
-  │
-  ├── Core
-  │   ├── config.py        → pydantic-settings, .env loading
-  │   ├── database.py      → async SQLAlchemy engine, session factory
-  │   ├── security.py      → JWT encode/decode, bcrypt
-  │   ├── deps.py          → get_current_user dependency
-  │   └── logging.py       → structlog configuration
-  │
-  └── Models (SQLAlchemy ORM)
-      ├── User
-      ├── DataSource
-      ├── Review
-      ├── Cluster
-      ├── Ticket
-      ├── Message
-      └── PipelineJob
-
-Redis (port 6380)
-  ├── Celery task queue (broker)
-  └── Celery result backend
-
-Celery Worker (same codebase, different entrypoint)
-  ├── app.pipeline.tasks.scrape_and_run
-  │   ├── google_play_scraper.reviews()
-  │   ├── Store Reviews in PostgreSQL (sync)
-  │   └── → _run_ml_pipeline()
-  │
-  ├── app.pipeline.tasks.run_pipeline
-  │   └── → _run_ml_pipeline()
-  │
-  └── _run_ml_pipeline()
-      ├── Load Reviews from DB
-      ├── clean_text() → preprocessing
-      ├── _score_to_sentiment() → star-rating-based sentiment
-      │   └── predict_sentiments() → RoBERTa fallback
-      ├── create_embeddings() → all-MiniLM-L6-v2
-      ├── cluster_texts() → KMeans (neg reviews → issues)
-      ├── cluster_texts() → KMeans (pos reviews → strengths)
-      ├── get_cluster_label() → TF-IDF keywords
-      ├── generate_cluster_summary_groq() → optional LLM
-      └── Store Clusters in PostgreSQL
-
-PostgreSQL (port 5434)
-  └── Database: ma_analytics
-      ├── users
-      ├── datasources
-      ├── reviews
-      ├── clusters
-      ├── tickets
-      ├── messages
-      └── pipeline_jobs
+┌────────────────────────────────────────────────────────────────┐
+│                         PRESENTATION                            │
+│              React 18 + TypeScript + Vite (port 3002)          │
+│   Dashboard · DataSources · InnovationLab · Search · Inbox     │
+└──────────────────────────┬─────────────────────────────────────┘
+                           │ HTTP/REST (JSON)
+┌──────────────────────────▼─────────────────────────────────────┐
+│                        APPLICATION                               │
+│                 FastAPI 0.115 (port 8000)                       │
+│  auth · datasources · innovation · intelligence · search ·      │
+│               dashboard · messages · tickets · jobs              │
+└────────┬──────────────────────────────────┬────────────────────┘
+         │ SQLAlchemy async (asyncpg)        │ Celery .delay()
+┌────────▼──────────────┐       ┌───────────▼────────────────────┐
+│      PERSISTENCE       │       │          COMPUTATION            │
+│   PostgreSQL 16        │       │      Celery Worker             │
+│   + pgvector 0.3       │       │  ├── Google Play Scraper       │
+│                        │       │  ├── Text preprocessing        │
+│  users                 │       │  ├── Sentiment (ABSA)          │
+│  datasources           │       │  ├── Embeddings (MiniLM)       │
+│  reviews + embeddings  │       │  ├── Signal extraction         │
+│  review_signals        │       │  ├── KMeans clustering         │
+│  review_sentences      │       │  └── Document chunking + embed │
+│  clusters              │       └────────────────────────────────┘
+│  innovation_briefs     │
+│  feature_narratives    │       ┌────────────────────────────────┐
+│  intelligence docs     │       │         AI PROVIDERS           │
+│  messages · tickets    │       │  Primary: Claude Haiku         │
+└────────────────────────┘       │  (claude-haiku-4-5-20251001)   │
+                                 │  Fallback: Groq                │
+         ┌───────────────────────│  llama-3.3-70b-versatile       │
+         │ Redis (port 6380)     │  llama-3.1-70b-versatile       │
+         │ Celery broker + cache │  gemma2-9b-it                  │
+         └───────────────────────└────────────────────────────────┘
 ```
 
 ---
 
-## 4. Data Flow: Full Pipeline Execution
+## 2. Data Flow — Review Pipeline
+
+The primary data flow transforms raw app store text into structured, queryable signals.
 
 ```
-User clicks "Connect & Analyze"
+Google Play ID or CSV
+        │
+        ▼
+  [Celery Task: run_pipeline]
+        │
+        ├── 1. Scrape / parse reviews
+        │         google-play-scraper → reviews table
+        │
+        ├── 2. Language detection
+        │         langdetect → filter to DE + EN
+        │
+        ├── 3. Sentence segmentation
+        │         → review_sentences table
+        │
+        ├── 4. Sentiment + aspect extraction
+        │         ABSA (fast_lcf_atepc multilingual checkpoint)
+        │         → review_aspects table
+        │
+        ├── 5. Embedding generation
+        │         paraphrase-multilingual-MiniLM-L12-v2 (384 dims)
+        │         → reviews.embedding (pgvector column)
+        │         → reviews.search_vector (tsvector for full-text)
+        │
+        ├── 6. Signal classification
+        │         Feature requests · Bugs · UX · Performance · General
+        │         → review_signals table (feature, signal_type, severity 0–5)
+        │
+        └── 7. KMeans clustering
+                  → clusters + cluster_reviews tables
+```
+
+Status tracking: `datasources.job_status` ∈ `{pending, running, done, failed}`.
+A Celery task ID is stored in `datasources.job_id` for polling via `GET /jobs/{task_id}`.
+
+---
+
+## 3. Innovation Lab Architecture
+
+The Innovation Lab is the primary intelligence output layer. It transforms raw signals into investor-ready product briefs through a multi-step pipeline.
+
+```
+POST /innovation/generate
            │
-           ▼
-POST /datasources/google-play
+           ├── 1. Build WHERE clause (scope: all / industry / datasource)
            │
-           ├── Create DataSource record (status: active)
-           ├── Create PipelineJob record (status: pending)
-           ├── Respond 201 → {datasource_id, job_id}
+           ├── 2. Signal exclusion
+           │         IF body.excluded_signals is set → use those (manual UI)
+           │         ELSE → auto-exclude top-3 signals from last 10 briefs
+           │                (prevents concept repetition across generations)
+           │         IF exclusion leaves < 5 signals → fallback: no exclusion
            │
-           └── scrape_and_run.delay(job_id, ds_id, app_id, ...)
-                          │
-                          ▼ (async, in Celery worker)
-               Job status: pending → running / "scraping"
-                          │
-               google_play_scraper.reviews(app_id, count=200)
-                          │ (network call, 5-30 seconds)
-                          ▼
-               Store N Review records in PostgreSQL
-                          │
-               Job status: running / "analyzing_sentiment"
-                          │
-               clean_text() on all review contents
-                          │
-               Star ratings → sentiment labels
-               (or RoBERTa model if no ratings)
-                          │
-               Update Review.sentiment for all records
-                          │
-               Job status: running / "creating_embeddings"
-                          │
-               SentenceTransformer.encode(texts)
-               → ndarray shape (N, 384)
-                          │
-               Job status: running / "clustering"
-                          │
-               KMeans on negative embeddings → Issue clusters
-               KMeans on positive embeddings → Strength clusters
-                          │
-               TF-IDF labels per cluster
-               Groq summaries (if API key present)
-                          │
-               Store Cluster records in PostgreSQL
-               Update DataSource.last_synced
-               Update PipelineJob.status = done
-                          │
-                          ▼
-           Frontend polls GET /jobs/{job_id} every 4s
-           Status: done → navigate to Dashboard
-                          │
-                          ▼
-           GET /dashboard/summary?datasource_id={id}
-           → KPIs, top issues, top strengths, AI insight
+           ├── 3. Signal retrieval — two modes
+           │
+           │    WITH hypothesis:
+           │    ├── Embed hypothesis text (paraphrase-multilingual-MiniLM-L12-v2)
+           │    ├── pgvector cosine search → top 500 semantically similar reviews
+           │    ├── Aggregate review_signals FROM those 500 reviews only
+           │    ├── Order by: avg cosine distance ASC, fr_mentions DESC
+           │    └── Enrich each signal with hypothesis-relevant review texts
+           │         (sorted by cosine distance to hypothesis, not severity)
+           │
+           │    WITHOUT hypothesis:
+           │    ├── Aggregate all review_signals across full corpus
+           │    └── Order by: app_count DESC, fr_mentions DESC, total DESC
+           │
+           ├── 4. Review enrichment per signal
+           │         Rank 1–3:   up to 20 reviews
+           │         Rank 4–8:   up to 12 reviews
+           │         Rank 9–15:  up to 8 reviews
+           │         Rank 16+:   up to 4 reviews
+           │         Pool 5× target, deduplicate on first 60 chars
+           │
+           ├── 5. Signal graph computation
+           │         Co-occurrence: signals appearing in the same review
+           │         Hub detection: signals with >20% of total co-occurrence weight
+           │         Hub = systemic OEM infrastructure problem
+           │         Edge = standalone third-party product opportunity
+           │
+           ├── 6. Prompt construction (_build_prompt)
+           │         Part A: compact overview of ALL signal clusters
+           │         Part B: deep-dive — top 15 signals with real review texts
+           │         Signal graph block: hub vs edge classification
+           │         Previous concepts block: "avoid these product names/concepts"
+           │         Retrieval mode header: "hypothesis-guided" label if applicable
+           │         AUSFÜLLANWEISUNG: field instructions with HIER_ placeholders
+           │
+           ├── 7. Claude JSON generation (temperature 0.6)
+           │         Primary: Claude Haiku via anthropic SDK
+           │         On error: Groq cascade (llama-3.3-70b → llama-3.1-70b → gemma2)
+           │         Multi-key rotation on 429 rate limit errors
+           │         Returns: InnovationBrief JSON (product_name, features, etc.)
+           │
+           ├── 8. Concept description generation (Claude text, temperature 0.4)
+           │         Long-form strategic document ~1200+ words
+           │         9 sections: Executive Summary · Market Analysis · Product Vision
+           │         · Feature Details · Target Audience · Differentiation
+           │         · Risk Assessment · Go-to-Market · Roadmap
+           │
+           └── 9. Persist to innovation_briefs table
+                     RETURNING id → SavedBriefFull returned to client
+```
+
+**On-demand concept generation:**
+`POST /innovation/briefs/{id}/generate-concept` regenerates the long-form concept for any saved brief.
+
+**Brief Copilot:**
+`POST /innovation/briefs/{id}/chat` — conversational Q&A using the brief as context.
+
+**Signal selector endpoint:**
+`POST /innovation/signals` — returns all available signal clusters with counts and severity for the given filter scope. Used by the frontend Signal-Steuerung panel.
+
+---
+
+## 4. Signal Graph
+
+The signal graph is computed on-demand from the review_signals table using a self-join co-occurrence query. It does not require a separate graph database.
+
+```sql
+-- Co-occurrence: signals appearing in the same review
+SELECT a.feature AS sig_a, b.feature AS sig_b,
+       COUNT(DISTINCT a.review_id) AS co_count
+FROM review_signals a
+JOIN review_signals b ON a.review_id = b.review_id AND a.feature < b.feature
+WHERE {scope filter}
+GROUP BY a.feature, b.feature
+HAVING COUNT(DISTINCT a.review_id) >= 10
+ORDER BY co_count DESC
+
+-- Hub detection
+hub_score[signal] = sum of co_count for all its edges
+hub_threshold = total_weight * 0.20
+is_hub = hub_score >= hub_threshold
+```
+
+**Purpose:** Tells the LLM which signals are infrastructure-level OEM problems (hubs) versus standalone product opportunities (edge nodes). The prompt includes a strategic instruction: "Build the concept on edge signals, not hub signals."
+
+---
+
+## 5. Hybrid Search Architecture
+
+```
+POST /search/
+      │
+      ├── Embed query → 384-dim vector
+      │
+      ├── Vector branch
+      │     cosine similarity via pgvector <=> operator
+      │     ROW_NUMBER() OVER (ORDER BY distance ASC)
+      │
+      ├── Full-text branch
+      │     ts_rank_cd(search_vector, websearch_to_tsquery())
+      │     ROW_NUMBER() OVER (ORDER BY rank DESC)
+      │
+      └── RRF fusion
+            rrf_score = 1/(60 + rank_vector) + 1/(60 + rank_fulltext)
+            ORDER BY rrf_score DESC
+```
+
+Search modes: `hybrid` (default), `vector`, `fulltext`.
+
+---
+
+## 6. Document Intelligence Architecture
+
+```
+POST /intelligence/upload (PDF)
+      ├── Extract text per page
+      ├── Chunk with page overlap
+      ├── Embed each chunk (MiniLM, same model as reviews)
+      └── Store: intelligence_documents + intelligence_chunks tables
+
+POST /intelligence/query
+      ├── Embed question
+      ├── pgvector cosine search → top K chunks
+      ├── Claude: answer from retrieved context
+      └── Return answer + source page references
+
+POST /intelligence/extract-all
+      └── Batch metric extraction (Scope 1/2/3, reduction targets,
+          regulatory obligations) → intelligence_metrics table
 ```
 
 ---
 
-## 5. Deployment Architecture
+## 7. AI Provider Strategy
 
-### Development (Local)
+**Primary:** Anthropic Claude Haiku (`claude-haiku-4-5-20251001`)
+- JSON brief generation: temperature 0.6
+- Concept description text: temperature 0.4
+- Brief chat: temperature 0.4, max_tokens 1200
+- Document Q&A: temperature 0.3
 
+**Fallback cascade** (triggered on any Claude error including rate limits):
 ```
-┌─────────────────────────────────────────────┐
-│              Developer Machine               │
-│                                              │
-│  Docker Compose:                             │
-│  ├── PostgreSQL (port 5434)                  │
-│  └── Redis (port 6380)                       │
-│                                              │
-│  Local processes:                            │
-│  ├── uvicorn (port 8001, --reload)           │
-│  ├── Celery worker (-P solo, macOS fix)      │
-│  └── Vite dev server (port 3002, HMR)        │
-└─────────────────────────────────────────────┘
-```
+JSON generation fallback (_groq_json_fallback):
+  llama-3.3-70b-versatile (key 1) → llama-3.1-70b-versatile (key 1)
+  → gemma2-9b-it (key 1) → llama-3.3-70b-versatile (key 2)
+  → llama-3.1-70b-versatile (key 2) → gemma2-9b-it (key 2)
+  → HTTP 429 if all exhausted
 
-### Production (Docker Compose, Single Server)
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                   VPS (Hetzner CPX31)                    │
-│                   8 vCPU, 16GB RAM                       │
-│                                                          │
-│  Docker Compose:                                         │
-│  ├── postgres:16 (internal network only)                 │
-│  ├── redis:7-alpine (internal network only)              │
-│  ├── backend (FastAPI, port 8000 internal)               │
-│  ├── worker (Celery, prefork pool, 4 workers)            │
-│  └── frontend (Nginx, port 80 → reverse proxy)          │
-│                                                          │
-│  External:                                               │
-│  └── Caddy / Nginx (TLS termination, port 443)          │
-└─────────────────────────────────────────────────────────┘
+Text/chat fallback (_groq_text_fallback):
+  llama-3.1-8b-instant → llama-3.3-70b-versatile → llama-3.1-70b-versatile
+  (per key)
 ```
 
-### Production (Phase 2 — Kubernetes)
+Rate limit detection: `_is_rate_limit(exc)` checks for `"429"`, `"rate_limit"`, `"overloaded"` in exception string.
 
-When customer count exceeds 500:
-- FastAPI → deployment (3 replicas, HPA)
-- Celery workers → deployment (2–10 replicas, KEDA autoscaling based on Redis queue depth)
-- PostgreSQL → managed service (Neon, Supabase, or RDS)
-- Redis → managed service (Upstash or ElastiCache)
-- Frontend → CDN (Cloudflare Pages or Vercel)
+Note: `llama-3.1-8b-instant` is excluded from JSON generation because it copies schema placeholder text literally instead of replacing it with real content.
 
 ---
 
-## 6. Key Architectural Decisions
+## 8. Authentication
 
-### ADR-001: Celery over FastAPI Background Tasks
+Stateless JWT with HTTP-only cookies.
 
-**Context:** The ML pipeline takes 30s–5min. FastAPI has built-in `BackgroundTasks`.
-
-**Decision:** Use Celery + Redis.
-
-**Rationale:**
-- FastAPI BackgroundTasks run in the same process — if the server restarts, the task is lost
-- Celery tasks survive server restarts (they're in Redis)
-- Celery provides retry logic, task routing, and monitoring (Flower)
-- At scale, worker processes can be scaled independently from API processes
-
-**Trade-off:** Adds operational complexity (Redis dependency). Accepted.
+- `access_token`: 15-minute lifetime, signed with `SECRET_KEY` (HS256)
+- `refresh_token`: 7-day lifetime, stored as HTTP-only cookie
+- Password hashing: bcrypt via passlib
+- Password reset: time-limited token stored in `users.reset_token` + email via Resend
 
 ---
 
-### ADR-002: Synchronous SQLAlchemy in Celery Worker
+## 9. Clean Architecture Principles Applied
 
-**Context:** We use async SQLAlchemy (asyncpg) in FastAPI. Should we use the same in Celery?
-
-**Decision:** Use synchronous SQLAlchemy (psycopg2) in Celery workers.
-
-**Rationale:**
-- Celery tasks are synchronous by default. Running asyncio inside sync tasks requires `asyncio.run()` wrapper which creates a new event loop per task — fragile and slow
-- ML libraries (PyTorch, sentence-transformers) are not async-aware
-- psycopg2 is battle-tested and appropriate for the CPU-bound worker context
-
-**Trade-off:** Two separate database configurations (async + sync). Managed via `app/pipeline/db.py` (sync) vs `app/core/database.py` (async). Clear separation.
-
----
-
-### ADR-003: Star Rating as Primary Sentiment Signal
-
-**Context:** We have both star ratings (1-5) and a transformer model for sentiment.
-
-**Decision:** Use star rating as primary sentiment signal when available (>50% of reviews have ratings). Use transformer model as fallback.
-
-**Rationale:**
-- Star ratings are ground truth from the user — more reliable than NLP inference for German text
-- The RoBERTa model (`cardiffnlp/twitter-roberta-base-sentiment-latest`) was trained primarily on English Twitter data — accuracy on German app reviews is poor
-- Clustering by star-rating-derived sentiment produces much cleaner clusters
-
-**Trade-off:** Loses nuance (a 3-star review might be very negative or mildly positive). Accepted — aggregate accuracy matters more than edge cases.
-
----
-
-### ADR-004: TF-IDF for Cluster Labels (not pure LLM)
-
-**Context:** Each cluster needs a human-readable label.
-
-**Decision:** Use TF-IDF keyword extraction (top 3 keywords joined by " / ") as primary labeling. Use Groq LLM for summaries when API key is available.
-
-**Rationale:**
-- TF-IDF is deterministic, free, fast, and works offline
-- LLM labels are better quality but cost money per cluster and require network access
-- The hybrid approach gives usable labels always, great labels when LLM is configured
-
----
-
-## 7. Scalability Constraints & Mitigations
-
-| Constraint | Current Limit | Mitigation |
-|------------|--------------|------------|
-| Celery pool=-P solo (macOS) | 1 concurrent task | Linux production uses prefork (4+ workers) |
-| Google Play rate limiting | ~1,000 req/hour | Exponential backoff + retry in scraper |
-| ML model load time (first request) | ~10-20 seconds | Models loaded once, cached as module-level singletons |
-| KMeans determinism | Non-deterministic | `random_state=42` fixed seed |
-| PostgreSQL connection pool | 10 connections (asyncpg default) | Increase via `pool_size` in production |
-
----
-
-*Document Owner: Engineering / Architecture*
-*Last Updated: 2026-07*
-*Status: v1.0 — Production-ready single-server deployment*
+| Principle | How |
+|-----------|-----|
+| No logic in routers | All signal aggregation, prompt building, and AI calls are in helper functions, not route handlers |
+| Async-first | All DB operations use `await db.execute()`. No sync DB in request path |
+| Dependency injection | `get_db`, `get_current_user` via FastAPI `Depends()` |
+| Migration-driven schema | Alembic handles all schema changes — no `create_all()` in production |
+| Single embedding model | All vectors (reviews, documents, hypotheses) use the same 384-dim model — ensures meaningful cosine similarity across search types |
+| AI provider isolation | `_call_claude_json`, `_call_claude_text` are pure functions — swapping providers means only changing these functions |

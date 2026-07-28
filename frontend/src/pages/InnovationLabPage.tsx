@@ -1,12 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { AppShell } from '../components/AppShell'
-import { datasourceApi, innovationApi } from '../services/api'
+import { datasourceApi, innovationApi, SignalInfo } from '../services/api'
 import {
   Lightbulb, Zap, Target, Users, ShieldAlert, TrendingUp,
   ChevronDown, ChevronUp, Loader2, AlertCircle, Sparkles,
   BarChart3, Globe, MessageSquare, CheckCircle2, AlertTriangle,
-  XCircle, Clock, Trash2, History, Send, Bot
+  XCircle, Clock, Trash2, History, Send, Bot, FileText, Download,
+  SlidersHorizontal
 } from 'lucide-react'
+
+import { downloadBriefAsPDF } from '../utils/exportBriefPdf'
 
 interface ProductFeature { name: string; mentions: number; priority: string }
 interface FeatureSignal {
@@ -21,6 +24,7 @@ interface SavedBriefFull {
   differentiation: string; risk: string; risk_level: string
   hypothesis_check: string | null; hypothesis_alignment: string | null
   total_demand: number; apps_analyzed: number; sources: FeatureSignal[]
+  concept_description?: string | null
 }
 interface SavedBriefMeta {
   id: string; created_at: string; mode: string; scope: string
@@ -115,6 +119,139 @@ function BriefCard({ brief, onDelete, onClick, active }: {
   )
 }
 
+
+
+function ConceptDescriptionBlock({ briefId, initialConcept }: {
+  briefId: string
+  initialConcept: string | null
+}) {
+  const [concept, setConcept] = React.useState<string | null>(initialConcept)
+  const [loading, setLoading] = React.useState(false)
+  const [genError, setGenError] = React.useState<string | null>(null)
+
+  const handleGenerate = async () => {
+    setLoading(true)
+    setGenError(null)
+    try {
+      const res = await innovationApi.generateConcept(briefId)
+      setConcept(res.concept_description)
+    } catch {
+      setGenError('Fehler beim Generieren. Bitte erneut versuchen.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (concept) {
+    return <ConceptDescriptionSection text={concept} />
+  }
+
+  return (
+    <div className="bg-slate-800/30 border border-dashed border-white/[0.08] rounded-xl p-5 flex flex-col items-center gap-3">
+      <div className="flex items-center gap-2.5">
+        <FileText size={16} className="text-slate-500" />
+        <span className="text-sm font-medium text-slate-400">Vollständige Konzeptbeschreibung</span>
+      </div>
+      <p className="text-xs text-slate-600 text-center max-w-sm">
+        Erstellt ein 1.200+ Wort-Dokument mit Marktanalyse, Feature-Details, Go-to-Market und Risikoanalyse — alles auf Basis der echten Signaldaten.
+      </p>
+      {genError && <p className="text-xs text-red-400">{genError}</p>}
+      <button
+        onClick={handleGenerate}
+        disabled={loading}
+        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+          loading
+            ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+            : 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-lg shadow-indigo-500/20'
+        }`}
+      >
+        {loading
+          ? <><Loader2 size={13} className="animate-spin" /> Konzept wird generiert...</>
+          : <><FileText size={13} /> Konzept generieren</>
+        }
+      </button>
+      {loading && (
+        <p className="text-[10px] text-slate-600">Das kann 15–30 Sekunden dauern...</p>
+      )}
+    </div>
+  )
+}
+
+function ConceptDescriptionSection({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const lines = text.split('\n')
+  const preview = lines.slice(0, 6).join('\n')
+
+  const renderLine = (line: string, idx: number) => {
+    if (line.startsWith('## ')) {
+      return (
+        <h3 key={idx} className="text-sm font-bold text-indigo-300 uppercase tracking-wider pt-5 pb-1 border-b border-white/[0.06] first:pt-0">
+          {line.slice(3)}
+        </h3>
+      )
+    }
+    if (line.startsWith('### ')) {
+      return (
+        <h4 key={idx} className="text-sm font-semibold text-slate-200 pt-3 pb-0.5">
+          {line.slice(4)}
+        </h4>
+      )
+    }
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      return (
+        <div key={idx} className="flex gap-2 text-sm text-slate-300 leading-relaxed">
+          <span className="text-indigo-400 shrink-0 mt-0.5">•</span>
+          <span>{line.slice(2)}</span>
+        </div>
+      )
+    }
+    if (/^\d+\.\s/.test(line)) {
+      const match = line.match(/^(\d+)\.\s(.*)/)
+      if (match) {
+        return (
+          <div key={idx} className="flex gap-2 text-sm text-slate-300 leading-relaxed">
+            <span className="text-indigo-400 shrink-0 font-medium w-5">{match[1]}.</span>
+            <span>{match[2]}</span>
+          </div>
+        )
+      }
+    }
+    if (line.trim() === '') return <div key={idx} className="h-2" />
+    return <p key={idx} className="text-sm text-slate-300 leading-relaxed">{line}</p>
+  }
+
+  return (
+    <div className="bg-slate-800/30 border border-indigo-500/15 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] bg-indigo-500/5">
+        <div className="flex items-center gap-2.5">
+          <FileText size={14} className="text-indigo-400 shrink-0" />
+          <span className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">Vollständige Konzeptbeschreibung</span>
+        </div>
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-[11px] text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"
+        >
+          {expanded ? <><ChevronUp size={12} /> Einklappen</> : <><ChevronDown size={12} /> Vollständig lesen</>}
+        </button>
+      </div>
+      <div className="px-5 py-4 space-y-1">
+        {expanded
+          ? lines.map((l, i) => renderLine(l, i))
+          : (
+            <>
+              {preview.split('\n').map((l, i) => renderLine(l, i))}
+              <p className="text-xs text-slate-600 pt-2 italic">
+                ... {lines.length - 6} weitere Zeilen. Klicke auf "Vollständig lesen" um das gesamte Konzept anzuzeigen.
+              </p>
+            </>
+          )
+        }
+      </div>
+    </div>
+  )
+}
+
 interface ChatMsg { role: 'user' | 'assistant'; content: string }
 
 function BriefDetail({ brief, mode }: { brief: SavedBriefFull; mode: string }) {
@@ -175,6 +312,12 @@ function BriefDetail({ brief, mode }: { brief: SavedBriefFull; mode: string }) {
                   <Clock size={9} /> {formatDate(brief.created_at)}
                 </span>
               )}
+            <button
+              onClick={() => downloadBriefAsPDF(brief)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300 transition-all text-[11px] font-medium"
+            >
+              <Download size={11} /> PDF
+            </button>
             </div>
             <h2 className="text-2xl font-bold text-white mt-2">{brief.product_name}</h2>
             <p className={`text-sm mt-1 ${mode === 'competitor' ? 'text-red-300/80' : 'text-violet-300/80'}`}>
@@ -230,6 +373,8 @@ function BriefDetail({ brief, mode }: { brief: SavedBriefFull; mode: string }) {
           ))}
         </div>
       </div>
+
+      <ConceptDescriptionBlock key={brief.id} briefId={brief.id} initialConcept={brief.concept_description ?? null} />
 
       <div className="bg-slate-800/40 border border-white/[0.06] rounded-xl p-4 flex items-start gap-3">
         <ShieldAlert size={15} className={`shrink-0 mt-0.5 ${RISK_STYLE[brief.risk_level] ?? 'text-amber-400'}`} />
@@ -387,9 +532,39 @@ export function InnovationLabPage() {
   const [historyOpen, setHistoryOpen] = useState(true)
   const [activeId, setActiveId] = useState<string | null>(null)
 
+  // Signal selector
+  const [signalPanelOpen, setSignalPanelOpen] = useState(false)
+  const [availableSignals, setAvailableSignals] = useState<SignalInfo[]>([])
+  const [disabledSignals, setDisabledSignals] = useState<Set<string>>(new Set())
+  const [userControlledSignals, setUserControlledSignals] = useState(false)
+  const [signalsLoading, setSignalsLoading] = useState(false)
+  const signalFetchRef = useRef<number>(0)
+
   const loadHistory = useCallback(() => {
     innovationApi.listBriefs().then((list: SavedBriefMeta[]) => setHistory(list)).catch(() => {})
   }, [])
+
+  const loadSignals = useCallback(async () => {
+    if (!signalPanelOpen) return
+    const token = ++signalFetchRef.current
+    setSignalsLoading(true)
+    try {
+      const body: Record<string, unknown> = { mode, scope }
+      if (scope === 'industry' && industry) body.industry = industry
+      if (scope === 'datasource' && selectedIds.size > 0) body.datasource_ids = [...selectedIds]
+      if (market.trim()) body.market = market.trim().toLowerCase()
+      const signals = await innovationApi.fetchSignals(body as Parameters<typeof innovationApi.fetchSignals>[0])
+      if (token === signalFetchRef.current) {
+        setAvailableSignals(signals)
+        setDisabledSignals(new Set())
+        setUserControlledSignals(false)
+      }
+    } catch {
+      // silent
+    } finally {
+      if (token === signalFetchRef.current) setSignalsLoading(false)
+    }
+  }, [signalPanelOpen, mode, scope, industry, selectedIds, market])
 
   useEffect(() => {
     datasourceApi.list().then((list: DataSource[]) => {
@@ -397,6 +572,8 @@ export function InnovationLabPage() {
     }).catch(() => {})
     loadHistory()
   }, [loadHistory])
+
+  useEffect(() => { loadSignals() }, [loadSignals])
 
   const industries = [...new Set(sources.map(s => s.industry).filter(Boolean))].sort()
   const isGuided = hypothesis.trim().length > 0
@@ -415,11 +592,12 @@ export function InnovationLabPage() {
     setBrief(null)
     setActiveId(null)
     try {
-      const body: Record<string, unknown> = { mode, scope }
+      const body: Parameters<typeof innovationApi.generate>[0] = { mode, scope }
       if (scope === 'industry' && industry) body.industry = industry
       if (scope === 'datasource' && selectedIds.size > 0) body.datasource_ids = [...selectedIds]
       if (market.trim()) body.market = market.trim().toLowerCase()
       if (hypothesis.trim()) body.user_hypothesis = hypothesis.trim()
+      if (userControlledSignals) body.excluded_signals = [...disabledSignals]
       const result: SavedBriefFull = await innovationApi.generate(body)
       setBrief(result)
       setActiveId(result.id)
@@ -583,6 +761,108 @@ export function InnovationLabPage() {
               <p className="text-[10px] text-slate-600 mt-1.5">
                 {isGuided ? 'KI validiert deine Idee gegen echte Nutzerdaten.' : 'Leer = freie Analyse. Mit Text = Hypothesenvalidierung.'}
               </p>
+            </div>
+
+            {/* Signal Selector */}
+            <div>
+              <button
+                onClick={() => setSignalPanelOpen(o => !o)}
+                className="w-full flex items-center justify-between py-1 group"
+              >
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal size={13} className="text-slate-500" />
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                    Signal-Steuerung
+                  </span>
+                  {userControlledSignals ? (
+                    disabledSignals.size > 0 ? (
+                      <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded font-medium">
+                        {disabledSignals.size} aus
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-medium">
+                        alle aktiv
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-[10px] bg-slate-700/60 text-slate-500 border border-white/[0.05] px-1.5 py-0.5 rounded font-medium">
+                      auto
+                    </span>
+                  )}
+                </div>
+                {signalPanelOpen
+                  ? <ChevronUp size={12} className="text-slate-600" />
+                  : <ChevronDown size={12} className="text-slate-600" />}
+              </button>
+
+              {signalPanelOpen && (
+                <div className="mt-2 space-y-2">
+                  {signalsLoading ? (
+                    <div className="flex items-center gap-2 py-3 justify-center">
+                      <Loader2 size={13} className="animate-spin text-slate-500" />
+                      <span className="text-[11px] text-slate-500">Lade Signale...</span>
+                    </div>
+                  ) : availableSignals.length === 0 ? (
+                    <p className="text-[11px] text-slate-600 py-2 text-center">
+                      Keine Signale gefunden. Datenbasis prüfen.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-600">
+                          {availableSignals.length - disabledSignals.size}/{availableSignals.length} aktiv
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => { setUserControlledSignals(true); setDisabledSignals(new Set()) }}
+                            className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors"
+                          >
+                            Alle
+                          </button>
+                          <button
+                            onClick={() => { setUserControlledSignals(true); setDisabledSignals(new Set(availableSignals.map(s => s.feature))) }}
+                            className="text-[10px] text-slate-500 hover:text-slate-400 transition-colors"
+                          >
+                            Keine
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {availableSignals.map(sig => {
+                          const disabled = disabledSignals.has(sig.feature)
+                          const isHotFR = sig.fr_mentions > 50
+                          const isHotBug = sig.bug_mentions > 200
+                          let activeStyle = 'bg-indigo-500/15 border-indigo-500/25 text-indigo-300'
+                          if (isHotBug && !isHotFR) activeStyle = 'bg-red-500/15 border-red-500/25 text-red-300'
+                          else if (isHotFR) activeStyle = 'bg-violet-500/15 border-violet-500/25 text-violet-300'
+                          return (
+                            <button
+                              key={sig.feature}
+                              onClick={() => {
+                                setUserControlledSignals(true)
+                                setDisabledSignals(prev => {
+                                  const next = new Set(prev)
+                                  next.has(sig.feature) ? next.delete(sig.feature) : next.add(sig.feature)
+                                  return next
+                                })
+                              }}
+                              title={`${sig.total_mentions} Erwähnungen · ${sig.fr_mentions} FR · ${sig.bug_mentions} Bugs`}
+                              className={`text-[10px] font-medium px-2 py-1 rounded-lg border transition-all ${
+                                disabled
+                                  ? 'bg-slate-800/40 border-white/[0.04] text-slate-600 line-through opacity-50'
+                                  : activeStyle
+                              }`}
+                            >
+                              {sig.feature}
+                              <span className="ml-1 opacity-60">{sig.total_mentions}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             <button onClick={handleGenerate} disabled={!canGenerate}

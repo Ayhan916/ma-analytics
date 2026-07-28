@@ -23,6 +23,8 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: list[str] = ["http://localhost:3002", "http://localhost:5173"]
 
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5-20251001"
     GROQ_API_KEY: str = ""
     GROQ_API_KEY_2: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"

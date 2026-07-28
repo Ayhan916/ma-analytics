@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-This document maps every user journey through MA Analytics from entry to outcome. Each flow is defined by:
+This document maps every major user journey through MA Analytics from entry point to outcome. Each flow is defined by:
 - **Trigger** — What causes the user to initiate this flow
 - **Entry point** — Where in the UI the flow begins
 - **Steps** — The exact sequence of actions and system responses
@@ -20,426 +20,419 @@ This document maps every user journey through MA Analytics from entry to outcome
 
 ### Flow 1: New User Onboarding → First Insight
 
-**User type:** First-time user, no existing account
-**Trigger:** User lands on the app for the first time
-**Goal:** See their first clustered insight from their app's reviews
+**User type:** First-time user, no existing account  
+**Trigger:** User lands on the app for the first time  
+**Goal:** See their first clustered insight from their app's reviews  
 **Target time:** Under 10 minutes total
 
 ```
 1. User visits app (login page)
       │
       ▼
-2. Clicks "Registrieren" (Register)
+2. Clicks "Registrieren"
       │
       ▼
-3. Fills registration form
-   ├── Full name (optional)
-   ├── Email address
-   └── Password (min 8 chars)
+3. Fills registration form: Email + Password (min 8 chars)
       │
       ▼
-4. Submits form
-      │
-   ┌──┴──┐
-   │ ERROR PATHS:                           │
-   │ • Email already registered → show       │
-   │   "Email already in use" inline        │
-   │ • Password too short → show inline     │
-   │   validation before submission         │
-   │ • Network error → show generic error   │
-   │   with retry                           │
-   └────────────────────────────────────────┘
-      │ SUCCESS
-      ▼
-5. JWT token stored in localStorage
+4. Submits form → JWT access token set as HTTP-only cookie
    User redirected to /datasources
       │
       ▼
-6. Sees empty Data Sources page
+5. Sees empty Data Sources page
    Empty state: "Verbinde deine erste App-Datenquelle"
-   + "Google Play verbinden" button (prominent)
+   + "Google Play verbinden" button
       │
       ▼
-7. Clicks "Google Play verbinden"
-   → Form slides in (or modal opens)
-      │
-      ▼
-8. Fills Google Play form:
+6. Fills Google Play form:
    ├── Name: "BMW Connected"
    ├── App ID: "de.bmw.connected" OR full Play Store URL
-   │   (URL auto-parsed: play.google.com/store/apps/details?id=X)
-   ├── Review count: 200 (default, dropdown: 50/100/200/500)
-   ├── Language: "de" (dropdown)
-   └── Country: "de" (dropdown)
+   ├── Review count: 200 (default)
+   └── Language: "de"
       │
       ▼
-9. Clicks "Verbinden & Analysieren"
+7. Clicks "Verbinden & Analysieren"
+   System: creates DataSource, dispatches Celery pipeline task
       │
       ▼
-10. System:
-    ├── Creates DataSource record
-    ├── Creates PipelineJob (status: pending)
-    ├── Dispatches Celery task
-    └── Returns job_id
+8. UI shows pipeline progress (polling every 4 seconds):
+   scraping → language detection → sentiment → embeddings → signals → clustering
       │
       ▼
-11. UI shows pipeline progress indicator:
-    ├── "Scraping reviews from Google Play..." (spinner)
-    ├── Progress updates every 4 seconds via polling
-    └── Stages: scraping → saving → sentiment → embeddings → clustering
+9. Pipeline complete (~60-120 seconds)
+   UI shows: "✓ Analyse abgeschlossen — 200 Reviews analysiert"
       │
       ▼
-12. [30-120 seconds later] Pipeline complete
-    PipelineJob.status = "done"
-    UI detects completion on next poll
-      │
-      ▼
-13. UI shows success state:
-    "✓ Analyse abgeschlossen — 200 Reviews analysiert"
-    + "Zum Dashboard" button
-      │
-      ▼
-14. User clicks "Zum Dashboard"
-    Redirected to /dashboard
-    DataSource auto-selected (only one exists)
-      │
-      ▼
-15. Dashboard renders:
-    ├── KPI row: 200 reviews | Ø 2.8★ | 40% positive | 45% negative
-    ├── Sentiment bar (green/grey/red)
-    ├── Top Issues (3-5 cards)
-    ├── Top Strengths (3-5 cards)
-    └── AI Insight paragraph
+10. User navigates to /dashboard
+    Dashboard renders: KPI row, sentiment bar, Top Issues, Top Strengths, AI narrative
 ```
 
-**Exit point:** User is on Dashboard, seeing their first insight
-**Success metric:** User completed flow in <10 minutes AND saw at least 1 cluster
-
----
-
-### Flow 2: Returning User — Daily Review Check
-
-**User type:** Active user, existing data sources
-**Trigger:** Monday morning — user wants to check if anything changed
-**Goal:** Quickly assess current customer sentiment, identify new issues
-**Target time:** Under 5 minutes
-
-```
-1. User navigates to app (auto-logged in if token valid)
-      │
-      ▼
-2. Lands on Dashboard (last page visited, or /dashboard as default)
-      │
-      ▼
-3. Selects data source from dropdown
-   (If only one source: auto-selected)
-      │
-      ▼
-4. Scans KPI row:
-   ├── Are numbers better or worse than last week?
-   └── Note the average rating trend
-      │
-      ▼
-5. Reads AI Insight paragraph
-      │
-   ┌──┴──────────────────────────┐
-   │ BRANCH A: No new concerns   │
-   │ User closes app — done      │
-   └─────────────────────────────┘
-      │
-   ┌──┴──────────────────────────┐
-   │ BRANCH B: Sees an issue     │
-   │ cluster with high mentions  │
-   └─────────────────────────────┘
-      │
-      ▼
-6. Clicks on top issue cluster card
-   Card expands → shows example quotes
-      │
-      ▼
-7. Reads quotes → confirms issue is real
-      │
-      ▼
-8. Navigates to Kanban (/tickets)
-      │
-      ▼
-9. Creates ticket from issue:
-   ├── Title: based on cluster label
-   ├── Description: pastes example quote
-   ├── Priority: High
-   └── Clicks "Erstellen"
-      │
-      ▼
-10. Ticket appears in Backlog column
-    User assigns it or leaves in Backlog for review
-```
-
-**Exit point:** Kanban board with new ticket created
-**Success metric:** Daily check completed in <5 minutes
-
----
-
-### Flow 3: CSV Upload (Non-Google-Play Data)
-
-**User type:** User with reviews from app store reviews export, survey data, or support tickets in CSV format
-**Trigger:** User has data that isn't on Google Play (Apple App Store, Trustpilot export, survey CSV)
-**Goal:** Analyze the custom dataset through the same ML pipeline
-
-```
-1. User navigates to /datasources
-      │
-      ▼
-2. Clicks "CSV hochladen"
-      │
-      ▼
-3. CSV upload area appears:
-   ├── Drag-and-drop zone
-   └── "Datei auswählen" fallback button
-      │
-      ▼
-4. User prepares CSV (or uses existing export):
-   Required column: review text
-   Optional columns: rating (1-5), date, version
-      │
-      ▼
-5. User drags CSV onto drop zone OR clicks to select file
-   ├── File validates: is it a .csv? Is it <10MB?
-   │   ERROR: "Nur CSV-Dateien unter 10MB erlaubt"
-   └── File accepted: filename shown with ✓
-      │
-      ▼
-6. User fills in form fields:
-   ├── Name: "App Store Reviews Q1 2025"
-   ├── Text column: "content" (default) OR custom column name
-   │   If user's CSV uses "review_text", they type "review_text"
-   ├── Score column: "score" (default, optional)
-   └── Date column: "at" (default, optional)
-      │
-      ▼
-7. Clicks "Hochladen & Analysieren"
-      │
-      ▼
-8. System:
-   ├── Parses CSV rows
-   ├── Maps columns according to user config
-   ├── Stores Review records
-   └── Dispatches run_pipeline task (no scraping needed)
-      │
-      ▼
-9. Pipeline runs (same as Google Play flow, steps 11-15)
-   Completes faster (no scraping step)
-```
-
-**Exit point:** Dashboard showing CSV data analysis
 **Error paths:**
-- File too large → immediate error before upload
-- CSV has no recognizable text column → error with column names found listed
-- CSV is empty → error "0 reviews found"
+- Email already registered → inline error "E-Mail bereits vergeben"
+- App ID not found on Google Play → pipeline fails, error shown with retry button
+- Pipeline timeout → `failed` status, "Erneut versuchen" button appears
+
+**Success metric:** First insight visible in <10 minutes
 
 ---
 
-### Flow 4: Customer Message → AI Reply → Send
+### Flow 2: Innovation Brief Generation (Standard)
 
-**User type:** Customer Success Manager, Founder
-**Trigger:** Customer sends a complaint email / support message
-**Goal:** Draft and send a response quickly using AI assistance
+**User type:** PM or founder with existing data  
+**Trigger:** User wants product ideas based on review signals  
+**Goal:** Generate a structured product brief with AI  
+**Target time:** Under 5 minutes (generation itself takes 5–15 seconds)
 
 ```
-1. User navigates to /inbox
+1. User navigates to /innovation (Innovation Lab)
       │
       ▼
-2. Sees message list:
-   ├── [negative] Max M. — "Ich kann mich seit 2 Wochen nicht einloggen..."
-   ├── [positive] Anna K. — "Super App, genau was ich gesucht habe!"
-   └── [neutral] Thomas B. — "Wann kommt das Update für iOS?"
+2. Selects Mode:
+   ├── "Wettbewerb" — find weaknesses in existing app categories to exploit
+   └── "Innovation" — find unoccupied market gaps
       │
       ▼
-3. User clicks on Max M.'s negative message
+3. Selects Scope:
+   ├── "Alle" — aggregate signals across all connected apps
+   ├── "Industrie" — filter by industry (e.g. "Automotive")
+   └── "Datasource" — select specific app(s)
       │
       ▼
-4. Detail panel opens:
-   ├── Name: Max Mustermann
-   ├── Email: max@company.com
-   ├── Sentiment: 🔴 Negativ
-   ├── Full message text
-   └── Buttons: "Antwort generieren" | "Tickets erstellen"
+4. (Optional) Clicks "Signal-Steuerung" to expand signal panel
+   ├── Review available signals (chips with mention counts)
+   ├── Toggle individual chips to enable/disable
+   ├── Or use "Alle" / "Keine" quick actions
+   └── Badge shows: "auto" | "X aus" | "alle aktiv"
       │
       ▼
-5. User clicks "Antwort generieren"
+5. Clicks "Idee generieren"
       │
-   ┌──┴──────────────────────────────────────┐
-   │ System calls POST /messages/{id}/       │
-   │ generate-reply                          │
-   │ → Groq: personalizes to message content │
-   │ → Fallback: template based on sentiment │
-   └─────────────────────────────────────────┘
-      │
-      ▼
-6. AI reply displayed in text area:
-   "Vielen Dank für Ihre Nachricht, Herr Mustermann.
-    Wir bedauern, dass Sie Probleme mit dem Login haben.
-    Unser Team untersucht dieses Problem aktiv..."
-      │
-      ▼
-7. User edits reply if needed:
-   ├── Personalizes tone
-   ├── Adds specific details
-   └── Removes anything inaccurate
+   ┌──┴──────────────────────────────────────────────────────────┐
+   │ Backend:                                                    │
+   │ 1. Signal exclusion (manual from UI OR auto from history)   │
+   │ 2. Aggregate review_signals with exclusion applied          │
+   │ 3. Compute co-occurrence signal graph                       │
+   │ 4. Build prompt (signals + graph + previous concepts)       │
+   │ 5. Claude Haiku → JSON brief (temperature 0.6)             │
+   │ 6. Claude text → concept description (temperature 0.4)     │
+   │ 7. Save to innovation_briefs table                         │
+   │ 8. Return SavedBriefFull                                   │
+   └─────────────────────────────────────────────────────────────┘
       │
       ▼
-8. [Phase 1 — Manual copy] User copies text, sends via email client
-   [Phase 2 — Send button] Clicks "Antwort senden" → Resend API delivers email
+6. Brief appears in right panel history list (newest first)
+   Auto-selects and displays the new brief
+      │
+      ▼
+7. User reads:
+   ├── Product name + tagline
+   ├── Core problem (with data references)
+   ├── Feature list (with mention counts + priorities)
+   ├── Target audience
+   ├── Market gap description
+   ├── Differentiation
+   └── Risk assessment + risk level badge
 ```
 
-**Exit point:** Reply sent (Phase 2) or copied to clipboard (Phase 1)
-**Success metric:** Time to first reply draft <30 seconds
+**Error paths:**
+- Not enough data for scope → `422` error toast: "Nicht genug Daten für diesen Filter"
+- AI rate limited → Groq fallback cascade; if all fail → error toast with retry
+- JSON parse error → error toast (rare, retry usually succeeds)
+
+**Success metric:** Brief generated and displayed in <20 seconds total round-trip
 
 ---
 
-### Flow 5: Message → Auto-Generated Tickets
+### Flow 3: Hypothesis-Guided Brief Generation
 
-**User type:** Product Manager
-**Trigger:** Customer sends a message with multiple product issues
-**Goal:** Convert message into actionable Jira-style tickets instantly
+**User type:** PM or founder with a specific product hypothesis to validate  
+**Trigger:** User has a hypothesis ("I think drivers want OTA updates without garage visits") and wants evidence  
+**Goal:** Generate a brief where signals and reviews come from reviews semantically aligned with the hypothesis  
+**Target time:** Under 2 minutes (backend adds ~2-5 seconds for embedding + vector search)
 
 ```
-1. User is viewing a customer message in Inbox
-   (Same starting state as Flow 4, step 4)
+1. User is on /innovation, selects Mode + Scope as in Flow 2
       │
       ▼
-2. User clicks "Tickets erstellen"
-      │
-   ┌──┴──────────────────────────────────────┐
-   │ System calls POST /messages/{id}/        │
-   │ generate-tickets                         │
-   │ → Groq parses message, identifies        │
-   │   distinct issues, suggests titles +     │
-   │   descriptions + priority               │
-   │ → Creates 1-3 tickets in DB             │
-   └─────────────────────────────────────────┘
+2. Types hypothesis in "Ihre Hypothese" textarea:
+   "Fahrer wollen Software-Updates ohne Werkstattbesuch und
+    transparente Kommunikation über Update-Status"
       │
       ▼
-3. Success message: "3 Tickets erstellt"
-   List of created ticket titles shown
+3. (Optional) Adjusts Signal-Steuerung as in Flow 2
       │
       ▼
-4. User navigates to /tickets (Kanban)
+4. Clicks "Idee generieren"
+      │
+   ┌──┴──────────────────────────────────────────────────────────┐
+   │ Backend (hypothesis path):                                  │
+   │ 1. Embed hypothesis text (384-dim MiniLM vector)           │
+   │ 2. pgvector cosine search → top 500 semantically           │
+   │    similar reviews to hypothesis                           │
+   │ 3. Aggregate signals FROM those 500 reviews only           │
+   │ 4. Compute signal graph on those signals                   │
+   │ 5. Enrich each signal with hypothesis-relevant reviews      │
+   │    (sorted by cosine distance to hypothesis, not severity) │
+   │ 6. Inject: retrieval_header "Hypothese-gesteuerte          │
+   │    Signalauswahl" into prompt                              │
+   │ 7. Generate brief + concept as normal                      │
+   └─────────────────────────────────────────────────────────────┘
       │
       ▼
-5. Tickets appear in Backlog column with:
-   ├── [High] "Login-Problem beheben"
-   ├── [Medium] "Passwort-Reset-Email verbessern"
-   └── [Low] "App-Version auf Onboarding anzeigen"
+5. Brief includes:
+   ├── hypothesis_check: "Die Hypothese wird durch X Reviews bestätigt..."
+   ├── hypothesis_alignment: "stark" / "mittel" / "schwach"
+   └── Review quotes sorted by semantic similarity to hypothesis
       │
       ▼
-6. User clicks "Login-Problem beheben"
-   Detail panel opens
-      │
-      ▼
-7. User moves ticket to "Todo"
-   Status dropdown → "Todo"
-   → Auto-save (or Save button)
-      │
-      ▼
-8. Ticket disappears from Backlog column,
-   reappears in Todo column
+6. User reads brief and sees:
+   ├── Evidence specifically from hypothesis-relevant reviews
+   ├── Alignment assessment
+   └── Signal sources that responded to the hypothesis
 ```
 
-**Exit point:** Tickets in Kanban board in correct status
-**Success metric:** 0 minutes of manual ticket writing vs. previous 5-10 minutes per ticket
+**Benefit over standard flow:** Instead of pulling signals from the full corpus (where dominant signals like "Updates" always rank first), the hypothesis filters the review pool to only the most semantically relevant reviews. The resulting signals are topic-specific rather than corpus-dominant.
+
+**Error path:** If hypothesis text cannot be embedded (model unavailable), falls back to standard aggregation with a log warning.
 
 ---
 
-### Flow 6: Kanban Ticket Lifecycle
+### Flow 4: Concept Document Generation
 
-**User type:** Engineering lead or Product Manager
-**Trigger:** Sprint planning session
-**Goal:** Move tickets from Backlog through Done
+**User type:** PM or founder who has a brief and wants a deep-dive document  
+**Trigger:** User wants to extend a brief into a full strategic product document  
+**Goal:** Generate a ~1200+ word structured product concept document  
 
 ```
-Backlog → Todo
-──────────────
-1. User opens /tickets
-2. Clicks ticket in Backlog
-3. Detail panel: change Status → "Todo"
-4. Clicks "Speichern"
-5. Ticket moves to Todo column
-
-Todo → In Progress
-──────────────────
-1. Developer picks up ticket
-2. Opens ticket detail
-3. Changes Status → "In Progress"
-4. (Optional) Edits description to add implementation notes
-5. Saves
-
-In Progress → Done
-──────────────────
-1. Feature shipped
-2. Opens ticket
-3. Changes Status → "Done"
-4. (Optional) Adds comment: "Fixed in v3.2.2"
-5. Saves
-
-Done → Delete (if not needed)
-──────────────────────────────
-1. User clicks "Löschen" in ticket detail
-2. Confirmation dialog: "Ticket wirklich löschen?"
-3. User confirms → ticket deleted
-4. List refreshes, ticket gone
-```
-
-**Priority editing:**
-```
-1. Open ticket
-2. Change Priority dropdown (Low / Medium / High)
-3. PriorityBadge color updates immediately in preview
-4. Save → badge updates in list
+1. User has a saved brief selected in the right panel
+      │
+      ▼
+2. Clicks "Konzeptdokument" tab
+      │
+      ▼
+3. If no concept exists:
+   Shows "Konzept generieren" button + description of what will be generated
+      │
+      ▼
+4. Clicks "Konzept generieren"
+      │
+   ┌──┴──────────────────────────────────────────────────────────┐
+   │ POST /innovation/briefs/{id}/generate-concept               │
+   │ Claude text generation, temperature 0.4                     │
+   │ 9 sections: Executive Summary · Market Analysis ·           │
+   │ Product Vision · Feature Details · Target Audience ·        │
+   │ Differentiation · Risk Assessment · Go-to-Market · Roadmap  │
+   └─────────────────────────────────────────────────────────────┘
+      │
+      ▼
+5. Document renders as formatted markdown
+   (headings, bullet lists, paragraphs)
+      │
+      ▼
+6. "Konzept neu generieren" button appears for regeneration
 ```
 
 ---
 
-### Flow 7: Data Source Deletion
+### Flow 5: PDF Export
 
-**User type:** Any user
-**Trigger:** User connected wrong app, or wants to clean up old data
-**Goal:** Remove a data source and all associated analysis
-**Risk level:** High (irreversible action)
+**User type:** PM, founder, investor presentation preparer  
+**Trigger:** User wants to export a brief as a shareable PDF  
+**Goal:** Download a formatted A4 PDF of the selected brief  
 
 ```
-1. User navigates to /datasources
+1. User has a saved brief selected in the right panel
       │
       ▼
-2. Finds the data source to delete
+2. Clicks "PDF Export" tab
       │
       ▼
-3. Clicks trash icon (🗑) on the source card
+3. Sees preview description of PDF structure:
+   Header + product name + hypothesis validation + signal analysis +
+   feature table + risk block + concept excerpt + data sources table
       │
       ▼
-4. Confirmation dialog:
-   "BMW Connected wirklich löschen?
-    Alle 200 Reviews und Analysen werden unwiderruflich gelöscht."
-   [Abbrechen] [Löschen]
+4. Clicks "PDF herunterladen"
       │
-   ┌──┴──────────────────────────────────────┐
-   │ User clicks "Abbrechen" → no action     │
-   └─────────────────────────────────────────┘
-      │ User clicks "Löschen"
-      ▼
-5. System:
-   ├── DELETE /datasources/{id}
-   ├── Cascade: deletes reviews, clusters, pipeline_jobs
-   └── Returns 204
+   ┌──┴──────────────────────────────────────────────────────────┐
+   │ Client-side (no server call):                               │
+   │ exportBriefPdf.ts → jsPDF                                   │
+   │ Multi-page A4 document generated in browser                 │
+   │ Font: Helvetica, layout: text-based (no screenshots)        │
+   └─────────────────────────────────────────────────────────────┘
       │
       ▼
-6. Data source removed from list
-   Success toast: "Datenquelle gelöscht"
-
-   [If user is on Dashboard with this source selected]
-   → Dashboard shows empty state, prompts to select another source
+5. Browser prompts download: "TrustSync_Brief.pdf"
+   (or auto-downloads depending on browser settings)
 ```
 
-**Error path:** If delete fails (network error) → show error toast, source remains in list
+---
+
+### Flow 6: Brief Copilot Chat
+
+**User type:** PM or founder doing strategic exploration  
+**Trigger:** User wants to ask follow-up questions about a generated brief  
+**Goal:** Conversational deep-dive into the brief's strategic implications  
+
+```
+1. User has a saved brief selected in the right panel
+      │
+      ▼
+2. Clicks "Copilot" button or chat icon
+      │
+      ▼
+3. Right-side drawer opens:
+   "Brief Copilot — Fragen Sie über [Product Name]"
+      │
+      ▼
+4. User types question:
+   "Was wäre ein realistischer Preis für dieses Produkt?"
+      │
+      ▼
+5. System calls POST /innovation/briefs/{id}/chat
+   with message + conversation history
+   Claude responds with brief context injected into system prompt
+      │
+      ▼
+6. AI reply renders in chat bubble
+   User can continue conversation (full history maintained in frontend state)
+      │
+      ▼
+7. User closes drawer → history preserved if user reopens in same session
+```
+
+---
+
+### Flow 7: Data Source → Pipeline → Dashboard
+
+**User type:** Any authenticated user  
+**Trigger:** User wants to analyze a new Google Play app  
+**Goal:** See analyzed signals and dashboard for the new app
+
+```
+1. Navigate to /datasources → Click "Google Play verbinden"
+2. Fill form: Name + App ID + options
+3. Submit → Celery pipeline starts, DataSource shows "running" status
+4. Wait while polling shows progress every 4 seconds
+5. Pipeline completes → status shows "done"
+6. Navigate to Dashboard → select the new datasource from dropdown
+7. Dashboard populates with signals, clusters, KPIs
+```
+
+**Error flow:** If pipeline fails → red "failed" badge + error message + "Erneut versuchen" button. Retry creates a new pipeline job without re-creating the DataSource.
+
+---
+
+### Flow 8: Document Intelligence — Upload and Query
+
+**User type:** PM, analyst, compliance researcher  
+**Trigger:** User has a PDF document (CSDDD, CSRD, regulation, competitor report) to index  
+**Goal:** Ask semantic questions over the document content  
+
+```
+1. Navigate to /intelligence (Document Intelligence)
+      │
+      ▼
+2. Click "Dokument hochladen"
+      │
+      ▼
+3. Fill form:
+   ├── Upload PDF file
+   ├── Title: "CSDDD 2024 — Corporate Sustainability Due Diligence"
+   ├── Type: "regulation"
+   └── Year: 2024
+      │
+      ▼
+4. System: POST /intelligence/upload
+   ├── Extracts text per page
+   ├── Chunks with overlap
+   ├── Embeds each chunk (same 384-dim MiniLM model as reviews)
+   └── Stores in intelligence_documents + intelligence_chunks tables
+      │
+      ▼
+5. Document appears in list with status "indexed"
+      │
+      ▼
+6. User types question:
+   "Was sind die Kernpflichten für Unternehmen aus der CSDDD?"
+      │
+      ▼
+7. System: POST /intelligence/query
+   ├── Embeds question
+   ├── pgvector cosine search → top K relevant chunks
+   ├── Claude answers from retrieved context
+   └── Returns answer + source page references
+      │
+      ▼
+8. Answer displays with:
+   ├── Full text answer
+   └── Source citations: "Seite 12 — 'Unternehmen sind verpflichtet zu...'"
+```
+
+---
+
+### Flow 9: Customer Message → AI Reply → Send
+
+**User type:** Customer Success Manager, Founder  
+**Trigger:** Customer complaint or inquiry  
+**Goal:** Draft a response using AI assistance  
+
+```
+1. Navigate to /inbox
+2. Click customer message in list
+3. Detail panel shows message content + sentiment badge
+4. Click "Antwort generieren"
+5. System calls POST /messages/{id}/generate-reply
+   → Claude/Groq drafts personalized response
+6. Reply text appears in editable text area
+7. User edits if needed
+8. Copy text to clipboard → send via email client
+   (or: "Senden" button → Resend API, Phase 2)
+```
+
+---
+
+### Flow 10: Message → Ticket → Kanban
+
+**User type:** Product Manager  
+**Trigger:** Customer message contains actionable product issues  
+**Goal:** Convert message into Kanban tickets  
+
+```
+1. User viewing customer message in Inbox
+2. Click "Tickets erstellen"
+3. System: POST /messages/{id}/create-ticket
+   → AI parses message, identifies issues, creates 1-3 tickets
+4. Toast: "3 Tickets erstellt"
+5. User navigates to /tickets (Kanban)
+6. New tickets appear in Backlog column with:
+   ├── AI-suggested title and description
+   └── AI-suggested priority (High/Medium/Low)
+7. User moves tickets to appropriate status
+```
+
+---
+
+### Flow 11: Hybrid Search
+
+**User type:** PM or analyst doing deep research  
+**Trigger:** User wants to find specific reviews about a topic  
+**Goal:** Find the most relevant reviews using semantic + keyword search  
+
+```
+1. Navigate to /search
+2. Type query: "Bluetooth verbindung verliert sich nach Update"
+3. Select search type: Hybrid (default), Vector only, Fulltext only
+4. (Optional) Filter by app, star rating, language
+5. Click "Suchen"
+6. Results render with:
+   ├── Review text
+   ├── Similarity score
+   ├── App source
+   ├── Star rating + sentiment
+   └── Review date
+7. User clicks review to expand full text
+```
 
 ---
 
@@ -447,26 +440,44 @@ Done → Delete (if not needed)
 
 ### Authentication Failure
 ```
-Any protected page → 401 Unauthorized (token expired)
-  → User redirected to /login
+Protected page → 401 (token expired)
+  → apiClient interceptor detects 401
+  → Redirect to /login
   → After login → returned to last intended page
+```
+
+Note: `login()` and `register()` use `authAxios` (no interceptors) to avoid redirect loops.
+
+### All AI Providers Unavailable
+```
+Innovation brief generation fails after all Groq fallbacks exhausted
+  → HTTP 429 returned
+  → Error toast: "Alle KI-Anbieter sind momentan ausgelastet. Bitte später erneut versuchen."
+  → "Erneut versuchen" button (no auto-retry)
 ```
 
 ### Pipeline Failure
 ```
-Pipeline job fails (network error, scraping block, etc.)
-  → PipelineJob.status = "failed", error message stored
-  → UI shows: "⚠ Analyse fehlgeschlagen"
-             + error message (e.g., "App not found on Play Store")
-             + "Erneut versuchen" button
-  → Retry creates new PipelineJob, runs pipeline again
+Celery task fails (scraping blocked, model OOM, timeout)
+  → datasource.job_status = "failed", error_message stored
+  → UI shows: "⚠ Analyse fehlgeschlagen: [error_message]"
+  → "Erneut versuchen" button creates new pipeline job
 ```
 
-### Empty Dashboard (no completed pipeline)
+### Signal Exclusion Fallback
 ```
-User navigates to /dashboard with no data source
-  → Empty state: "Verbinde eine App, um loszulegen"
-               + "Zu Datenquellen" button
+User's exclusion list leaves < 5 signals
+  → Backend automatically re-runs aggregation without exclusion
+  → Brief generated from full signal set
+  → No error shown (silent fallback)
+```
+
+### Hypothesis Embedding Failure
+```
+ML model unavailable for hypothesis embedding
+  → Falls back to standard (non-hypothesis) signal aggregation
+  → Brief generated from full corpus without hypothesis filtering
+  → Log warning, no user-visible error
 ```
 
 ---
@@ -474,34 +485,63 @@ User navigates to /dashboard with no data source
 ## 4. Navigation Map
 
 ```
-/login ──────────────────── Register link → /register
+/login ───────────────────── Register → /register
   │
-  └── (auth) ──────────────────────────────────────────────────────┐
-                                                                    │
-/dashboard ←──── (after login / after pipeline completes)          │
-  │                                                                  │
-  ├── DataSource selector dropdown                                  │
-  ├── Cluster card expand                                           │
-  └── (empty state) → /datasources                                 │
-                                                                    │
-/datasources ←──── Sidebar nav item                                │
-  │                                                                  │
-  ├── Google Play form → POST → pipeline running → back to list    │
-  ├── CSV upload form → POST → pipeline running → back to list     │
-  └── Delete → confirm → removed from list                         │
-                                                                    │
-/inbox ←──── Sidebar nav item                                      │
-  │                                                                  │
-  ├── Message list → click → detail panel                          │
-  ├── Generate Reply → shows text → copy                           │
-  └── Generate Tickets → creates tickets → navigate to /tickets   │
-                                                                    │
-/tickets ←──── Sidebar nav item, link from Inbox                  │
-  │                                                                  │
-  ├── 4 columns: Backlog | Todo | In Progress | Done               │
-  ├── Click ticket → detail panel on right                         │
-  ├── Create ticket (inline form in Backlog)                       │
-  └── Edit / Delete ticket                                         │
+  └── (auth cookie set) ──────────────────────────────────────────┐
+                                                                   │
+/dashboard                                                         │
+  ├── DataSource selector dropdown                                 │
+  ├── KPI cards, sentiment bar                                     │
+  ├── Top Issues cluster cards (expand/collapse)                   │
+  ├── Top Strengths cluster cards                                  │
+  ├── AI Insight paragraph                                         │
+  └── (empty state) → /datasources                                │
+                                                                   │
+/datasources                                                       │
+  ├── Data source cards with status badges                         │
+  ├── "Google Play verbinden" form                                 │
+  ├── "CSV hochladen" form                                         │
+  ├── Pipeline progress polling                                    │
+  └── Delete datasource → confirmation → deleted                  │
+                                                                   │
+/innovation  (Innovation Lab)                                      │
+  ├── Mode selector (Wettbewerb / Innovation)                      │
+  ├── Scope selector (Alle / Industrie / App)                      │
+  ├── Hypothesis textarea (optional)                               │
+  ├── Signal-Steuerung panel (collapsible)                         │
+  │     └── Signal chips, Alle/Keine buttons, exclusion badge      │
+  ├── "Idee generieren" button                                     │
+  └── Brief history panel (right side)                            │
+        └── Selected brief detail                                  │
+              ├── Details tab (brief content)                      │
+              ├── Konzeptdokument tab (long-form)                  │
+              ├── PDF Export tab                                    │
+              └── Copilot button → chat drawer                     │
+                                                                   │
+/search                                                            │
+  ├── Query input + type selector + filters                        │
+  └── Results list (review text + metadata + similarity)           │
+                                                                   │
+/inbox                                                             │
+  ├── Message list (sentiment badge + preview)                     │
+  ├── Message detail panel                                         │
+  │     ├── "Antwort generieren" → editable reply text            │
+  │     └── "Tickets erstellen" → creates Kanban tickets          │
+  └── "Neue Nachricht" modal                                       │
+                                                                   │
+/tickets  (Kanban)                                                 │
+  ├── 4 columns: Backlog / Todo / In Progress / Done              │
+  ├── Ticket cards (title + priority badge)                        │
+  ├── Ticket detail panel (right side)                             │
+  │     ├── Edit title, description, status, priority             │
+  │     └── Delete with confirmation                              │
+  └── "Erstellen" form in Backlog column                          │
+                                                                   │
+/intelligence  (Document Intelligence)                             │
+  ├── Document list (title, type, page count, status)             │
+  ├── Upload PDF form                                              │
+  ├── Question input → AI answer + source citations               │
+  └── "Extraktion starten" → batch metric extraction              │
 ```
 
 ---
@@ -510,20 +550,20 @@ User navigates to /dashboard with no data source
 
 | Scenario | Expected Behavior |
 |----------|-------------------|
-| User opens Dashboard with no data sources | Empty state with CTA to connect first source |
-| User opens Dashboard while pipeline is running | Loading state / disabled selector until done |
-| User connects same Google Play app twice | System allows it — different DataSource records with separate analysis |
-| CSV has 0 rows | Error: "CSV enthält keine Bewertungen" |
-| CSV has 1 row | Pipeline runs, but clustering skipped (not enough data for KMeans) |
-| CSV has 10,000 rows | Works, but pipeline may take 5-10 minutes; progress stages visible |
-| Pipeline runs while user navigates away | Polling stops. User sees "running" state on return to /datasources |
-| Token expires mid-session | On next API call: 401 → redirect to /login |
-| Groq API key invalid | Fallback to rule-based — user sees result labeled "rule-based", not an error |
-| Message with no discernible sentiment | Classified as "neutral" |
-| Delete datasource that's currently being analyzed | Allowed — Celery task will fail gracefully (DataSource not found), job marked failed |
+| User generates briefs until all signals are excluded | Exclusion list leaves <5 signals → auto-fallback to no exclusion → brief generated from full corpus |
+| User clicks "Alle" in Signal-Steuerung | All chips enabled, `userControlledSignals=true`, `excluded_signals=[]` sent to backend → no exclusion at all |
+| User clicks "Keine" in Signal-Steuerung | All chips disabled → no signals → same fallback as above (empty list triggers no-exclusion fallback in backend) |
+| User types hypothesis but then clears it | Hypothesis field becomes empty string → treated as no hypothesis → standard aggregation |
+| Hypothesis language is English, reviews are German | Embedding model (paraphrase-multilingual-MiniLM-L12-v2) handles cross-lingual similarity; results are still meaningful |
+| PDF export of brief with no concept document | PDF generates without concept section; concept section replaced by "Noch kein Konzeptdokument" notice |
+| User deletes all briefs | History panel shows empty state; auto-exclusion has no briefs to exclude → no exclusion applied automatically |
+| Two tabs open, brief generated in one | Other tab's history is stale until refresh; no real-time sync |
+| CSV with 0 rows | 422 error: "CSV enthält keine Bewertungen" |
+| Google Play app has 0 reviews in selected language | Pipeline completes but produces empty signal table; dashboard shows "0 Reviews" |
+| Document intelligence query with no indexed documents | 422: "Keine Dokumente vorhanden" |
 
 ---
 
-*Document Owner: Product / UX Research*
-*Last Updated: 2026-07*
+*Document Owner: Product / UX Research*  
+*Last Updated: 2026-07*  
 *Status: v1.0 — All flows implemented and tested*

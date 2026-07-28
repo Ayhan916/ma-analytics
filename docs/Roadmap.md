@@ -6,306 +6,269 @@
 
 ## 1. Strategic Context
 
-### Where We Are
+### Where We Are (July 2026)
 
-MA Analytics has completed a full MVP build (Phase 1–7). The system is production-capable today:
+MA Analytics has completed a full-stack build with significantly more capability than a typical MVP. The system is production-capable today with the following modules fully implemented:
 
-- Google Play scraping + ML pipeline (sentiment → embeddings → clustering)
-- Dashboard with clustered insights, KPI summary, AI narrative
-- Customer Inbox with AI reply and ticket generation
-- Kanban board for issue tracking
-- Authentication, rate limiting, structured logging, Docker deployment
+**Core Data Pipeline:** Google Play scraping + CSV import → ABSA sentiment extraction → multilingual embeddings → signal classification → KMeans clustering. Processing 33,649 reviews from 5 automotive apps (BMW, Mercedes-Benz, Audi, Volkswagen, Porsche) with 41,620 extracted signals across 25 feature categories.
 
-**v1.0 is the product. Everything below is the business.**
+**Intelligence Layer (Innovation Lab):** The primary output module.
+- Hypothesis-Guided RAG: embed hypothesis → pgvector search over 32,300 reviews → aggregate signals from semantic matches
+- Signal Graph: co-occurrence analysis identifies OEM infrastructure problems (hubs) vs. product opportunities (edge signals)
+- Signal Exclusion: automatic (last 10 briefs) + manual (Signal-Steuerung panel) to prevent concept repetition
+- Multi-provider AI: Claude Haiku primary (temperature 0.6), Groq cascade fallback (llama-3.3-70b → llama-3.1-70b → gemma2)
+- Brief persistence, Copilot chat, long-form concept documents, PDF export
 
-### Where We're Going
+**Supporting Modules:** Hybrid search (RRF fusion), Document Intelligence (PDF RAG, metric extraction), Customer Inbox (AI reply), Kanban Board, Dashboard with KPIs.
 
-The immediate opportunity is **product-market fit validation**: get 10 paying customers using the product weekly, measure their behavior, and build exactly what they need next — nothing else.
+### What's Genuinely Not Built Yet
 
-The medium-term opportunity is **the integration layer**: the moment MA Analytics connects to real data sources in real time (Apple App Store, Zapier, email), it transforms from a batch analysis tool into a live customer intelligence platform.
-
-The long-term opportunity is **the intelligence layer**: when enough customers have enough data, MA Analytics becomes the industry benchmark — not just "what are MY customers saying" but "how does my customer sentiment compare to competitors in my category?"
+The current gaps are in three categories:
+1. **Platform hardening** — features needed before real customer onboarding (password reset, account deletion, email send)
+2. **Data breadth** — expanding beyond Google Play (Apple App Store, other sources)
+3. **Intelligence depth** — making the Innovation Lab's output more accurate and diverse (finer signal taxonomy, cross-source linking)
 
 ---
 
-## 2. Current State: v1.0 (Completed)
+## 2. Current State: v1.0 (Completed July 2026)
 
 ### What's Built
 
 | Area | Status | Notes |
 |------|--------|-------|
-| Auth (register, login, JWT) | ✅ Done | bcrypt, 24h tokens, rate limiting |
+| Auth (register, login, JWT HTTP-only cookies, refresh) | ✅ Done | bcrypt, 15min access + 7d refresh, rate limiting |
 | Google Play data source | ✅ Done | Scraping + full ML pipeline |
 | CSV upload | ✅ Done | Configurable column mapping |
-| Async pipeline (Celery) | ✅ Done | 5-stage with progress tracking |
-| Sentiment analysis | ✅ Done | Star rating primary, RoBERTa fallback |
-| Semantic clustering | ✅ Done | Embeddings + KMeans → issues + strengths |
-| Dashboard + KPIs | ✅ Done | 4 KPIs, sentiment bar, cluster cards |
-| AI Insight | ✅ Done | Groq + rule-based fallback |
+| Async pipeline (Celery) | ✅ Done | 7-stage with progress tracking |
+| ABSA sentiment analysis | ✅ Done | fast_lcf_atepc multilingual checkpoint |
+| Multilingual embeddings | ✅ Done | paraphrase-multilingual-MiniLM-L12-v2 (384 dims) |
+| pgvector semantic search | ✅ Done | IVFFlat index, cosine distance operator |
+| Full-text hybrid search | ✅ Done | tsvector GIN index, RRF fusion |
+| Signal extraction | ✅ Done | 25 feature labels, 6 signal types, severity 0–5 |
+| KMeans clustering | ✅ Done | Auto k, cluster labels and narratives |
+| Dashboard + KPIs | ✅ Done | 4 KPIs, sentiment bar, cluster cards, AI narrative |
+| Innovation Lab — core | ✅ Done | Mode, scope, signal aggregation, Claude brief |
+| Hypothesis-Guided RAG | ✅ Done | Embed → vector search → signal aggregation from subset |
+| Signal Graph | ✅ Done | Co-occurrence SQL, hub detection, prompt injection |
+| Signal Exclusion (auto) | ✅ Done | Top-3 signals from last 10 briefs |
+| Signal-Steuerung Panel (manual) | ✅ Done | Signal chips, Alle/Keine, exclusion badge |
+| Brief persistence + history | ✅ Done | innovation_briefs table, list + delete |
+| Concept document generation | ✅ Done | ~1200+ words, 9 sections, Claude temperature 0.4 |
+| Brief Copilot chat | ✅ Done | POST /innovation/briefs/{id}/chat |
+| PDF Export | ✅ Done | Client-side jsPDF, A4, multi-page |
+| Document Intelligence | ✅ Done | PDF upload, chunking, embedding, RAG Q&A |
+| Metric extraction | ✅ Done | Scope 1/2/3, reduction targets, regulatory obligations |
 | Customer Inbox | ✅ Done | Messages, AI reply, ticket generation |
 | Kanban Board | ✅ Done | 4 columns, ticket CRUD, priority |
 | Structured logging | ✅ Done | structlog JSON, X-Request-ID |
 | Rate limiting | ✅ Done | slowapi, per-endpoint limits |
-| Docker Compose | ✅ Done | PostgreSQL + Redis |
-| Full documentation | ✅ Done | 11 spec documents |
-| GitHub repository | ✅ Done | github.com/Ayhan916/ma-analytics |
+| Docker Compose (PostgreSQL + Redis) | ✅ Done | Port 5434, 6380 |
+| ESLint + TypeScript strict | ✅ Done | All frontend errors resolved |
 
-### What's Not Built (Known Gaps)
+### Known Gaps
 
-| Gap | Impact | When |
+| Gap | Impact | Target Phase |
 |-----|--------|------|
-| Password reset | Blocker for paid users who forget passwords | Phase 1.5 |
-| Email reply (Resend) | Inbox is read-only without it | Phase 1.5 |
-| Account deletion | GDPR compliance | Phase 1.5 |
-| Drag-and-drop Kanban | UX improvement | Phase 2 |
-| Apple App Store | Doubles addressable data sources | Phase 2 |
-| Trend charts | Dashboard depth | Phase 2 |
-| Multi-user teams | Enterprise sales blocker | Phase 3 |
+| Account deletion (`DELETE /auth/me`) | GDPR blocker for EU customers | Phase 1.5 |
+| Send email reply (Resend API in Inbox) | Inbox is read-only without it | Phase 1.5 |
+| Incremental scraping (delta only) | Full re-scrape is slow and wastes quota | Phase 1.5 |
+| Drag-and-drop Kanban | UX improvement, not blocking | Phase 2 |
+| Apple App Store integration | Doubles addressable data sources | Phase 2 |
+| Sentiment trend over time | Dashboard depth | Phase 2 |
+| Sub-signal taxonomy (25 → 125 labels) | Reduces concept clustering around dominant labels | Phase 2 |
+| Cross-source intelligence (reviews × docs) | High-value cross-referencing capability | Phase 2 |
+| Multi-user team workspaces | Enterprise sales blocker | Phase 3 |
+| SSO / SAML | Enterprise security requirement | Phase 3 |
+| API access (scoped keys) | Agency and integration use cases | Phase 3 |
 
 ---
 
 ## 3. Phase 1.5 — Production Hardening (Month 1–2)
 
-**Goal:** Get the product to a state where real customers can use it daily without friction.
-
+**Goal:** Get the product to a state where real paying customers can use it daily without friction.  
 **Success criteria:** 3 customers using product weekly for 4+ consecutive weeks.
 
 ### P0: Must-Have for First Paying Customer
 
-**Password Reset**
-- `POST /auth/forgot-password` → Resend API sends reset link
-- `POST /auth/reset-password?token=...` → validates link, sets new password
-- Reset tokens: 1-hour expiry, stored as hashed values
-- Effort: 2 days
-
-**Email Reply (Resend)**
-- `POST /messages/{id}/send-reply` → Resend API sends actual email to customer
-- Requires customer email on message
-- Reply preview already exists in UI; add "Senden" button
+**Account Deletion (GDPR Art. 17)**
+- `DELETE /auth/me` → cascade deletes user, datasources, reviews, signals, briefs, messages, tickets
+- Confirmation email before deletion (Resend)
 - Effort: 1 day
 
-**Account Deletion (GDPR)**
-- `DELETE /auth/me` → cascade deletes all user data
-- Confirmation email before deletion
+**Email Reply (Resend API)**
+- "Antwort senden" button in Inbox → `POST /messages/{id}/send-reply`
+- Resend API delivers email to customer_email
+- Reply preview already exists in UI; add Send button
 - Effort: 1 day
 
 **Pipeline Retry UI**
 - Failed pipeline shows "Erneut versuchen" button in /datasources
-- Calls existing `run_pipeline` task or `scrape_and_run` task
 - Effort: 0.5 days
 
 ### P1: Quality of Life
 
 **Incremental Scraping**
-- Track `last_synced` timestamp per data source
+- Track `last_synced` per datasource
 - On re-sync: only fetch reviews newer than `last_synced`
-- Prevents duplicate reviews, speeds up repeat analyses
+- Dedup via `external_id` (already stored)
 - Effort: 2 days
 
 **Message Filtering**
-- `/inbox?sentiment=negative` filter in API + frontend dropdown
+- Filter Inbox by sentiment: `/inbox?sentiment=negative`
+- Frontend dropdown
 - Effort: 1 day
 
-**Session Persistence**
-- Replace `localStorage` token with `httpOnly` cookie + refresh token
-- Security upgrade: XSS can't steal httpOnly cookies
-- Effort: 3 days
-
-**Performance Budget**
-- API response p95 under 200ms for all read endpoints (measure with k6)
-- Add missing composite indexes (`user_id` + status for tickets)
+**Performance Audit**
+- Measure all endpoints with k6; ensure p95 <200ms for reads
+- Add missing composite indexes (user_id + created_at for ordered queries)
 - Effort: 1 day
 
 ---
 
-## 4. Phase 2 — Growth Features (Month 2–4)
+## 4. Phase 2 — Breadth + Intelligence Depth (Month 2–5)
 
-**Goal:** Retain customers by deepening value. Target: 10 paying customers, €1,000 MRR.
+**Goal:** Retain customers by deepening value and expanding data sources.  
+**Target:** 10 paying customers, €2,000 MRR.
 
-**Guiding insight:** Customers churn when the product stops showing them new things. Phase 2 makes the dashboard richer and adds the second data source type that doubles addressable apps.
+### Sub-Signal Taxonomy
 
-### Data Sources
+The current 25 feature labels are too broad. "Updates" covers OTA failures, UI changes after update, data loss on update, and slow downloads — four different product opportunities, all collapsed into one label.
 
-**Apple App Store Integration**
-- Library: `app-store-scraper` (npm) or `apple_appstore_scraper` (Python)
-- Same pipeline: scrape → sentiment → embeddings → clustering
-- UI: add "Apple App Store" option in data source form
-- Business impact: iOS-first companies (major segment of B2C apps)
+**Plan:**
+- Re-classify signals into 100–150 sub-labels under the existing 25 top-level labels
+- Run `extract-all` re-extraction after taxonomy expansion
+- Re-cluster with new granular labels
+- Update Signal-Steuerung panel to show hierarchical chips (collapse/expand top-level)
+- Expected impact: significantly more diverse brief concepts; "Updates" stops dominating every generation
+
+Effort: 5 days (taxonomy design + re-extraction + UI update)
+
+### Cross-Source Intelligence
+
+The two existing intelligence layers (review signals + document RAG) are currently completely separate. Linking them would produce insights unavailable from either layer alone:
+
+- "Users report data deletion after app updates" + "GDPR Article 17 mandates right to erasure" → regulatory-driven product opportunity
+- "BMW app users complain about Scope 3 data unavailability" + "CSDDD requires Scope 3 disclosure" → compliance gap → product
+
+**Plan:**
+- Add `POST /intelligence/cross-query` endpoint
+- Embed review signal summaries → find relevant regulatory chunks via pgvector
+- Inject cross-source context into Innovation Brief prompt
+- Effort: 5 days
+
+### Apple App Store Integration
+
+- Library: `apple-appstore-scraper` (Python)
+- Same pipeline, new scraper adapter
+- UI: "Apple App Store" option in datasource form
 - Effort: 3 days
 
-**Webhook / Zapier Integration**
-- `POST /webhooks/review` → authenticated, receives single review object
-- Enables real-time ingestion from any source via Zapier
-- Triggers pipeline on accumulated reviews (batch every 50, or time-based)
-- Effort: 4 days
-
-### Dashboard
+### Dashboard Depth
 
 **Sentiment Trend Chart**
-- Line chart: sentiment scores over time (week-by-week)
-- Requires `reviewed_at` column (already stored)
-- Populate `mentions_over_time` in Cluster model
-- Frontend: recharts or nivo library
+- Line chart: avg sentiment by week, using `reviewed_at`
+- Frontend: recharts library
 - Effort: 3 days
 
 **Version Comparison**
-- "Compare this week vs. last week" toggle
-- Side-by-side cluster lists from two time ranges
-- Shows regression: "Login issues appeared in v3.2.1 but not v3.2.0"
+- Side-by-side cluster view for two time ranges
+- "v3.2.1 introduced Login issue that wasn't present in v3.2.0"
 - Effort: 4 days
 
-**Competitor Benchmarking**
-- User connects competitor's Google Play app
-- Dashboard shows: our app vs. competitor, cluster overlap, rating gap
-- Effort: 5 days
-
-### Kanban
+### Kanban Improvements
 
 **Drag-and-Drop**
-- `@dnd-kit/core` library for React DnD
+- `@dnd-kit/core` for React DnD
 - Drop ticket on column → `PATCH /tickets/{id}` with new status
-- Visual feedback: ghost card during drag
 - Effort: 2 days
-
-**Subtasks**
-- Checkbox list within ticket detail panel
-- Already in DB schema (`subtasks` JSON column)
-- Frontend: add/remove/check subtasks inline
-- Effort: 1 day
-
-**Jira Export**
-- `POST /integrations/jira/export-ticket/{id}`
-- Requires: Jira API key (user provides in settings)
-- Creates Jira issue, stores Jira issue key on ticket
-- Effort: 3 days
-
-### Intelligence Upgrades
-
-**AI-Suggested Priority**
-- When ticket is generated from a message or cluster, use Groq to suggest priority
-- "Login bug with 11+ mentions, negative sentiment → High priority"
-- Effort: 1 day
-
-**HDBSCAN Clustering (better clusters)**
-- Replace KMeans with HDBSCAN for datasets >500 reviews
-- HDBSCAN: handles irregular cluster shapes, identifies noise, no fixed k
-- Dramatically better clusters for large datasets
-- Effort: 2 days
-
-**Multilingual Support**
-- Detect language of review text (`langdetect`)
-- Translate to English before embedding (Google Translate API or LibreTranslate)
-- Improves clustering quality for multilingual apps
-- Effort: 3 days
 
 ---
 
-## 5. Phase 3 — Team & Enterprise (Month 5–8)
+## 5. Phase 3 — Team & Enterprise (Month 5–10)
 
-**Goal:** Land first enterprise deal. Target: €5,000 MRR, 1 enterprise account.
+**Goal:** Land first enterprise deal.  
+**Target:** €10,000 MRR, 1 enterprise account.
 
-**Guiding insight:** Enterprise buyers need three things beyond product functionality: team collaboration, security controls, and a vendor that won't disappear. Phase 3 addresses all three.
+### Multi-User Team Workspaces
 
-### Multi-User Teams
-
-**Workspace Model**
-- New entity: `Workspace` — a container for data sources, tickets, messages
+- New `Workspace` entity: container for datasources, briefs, tickets, messages
 - Users can be members of multiple workspaces
 - Roles: Owner, Admin, Member, Viewer
-- Effort: 8 days (significant data model change)
-
-**Team Invitation**
-- `POST /workspaces/{id}/invite` → sends invitation email
-- Invitation link with scoped token
-- Effort: 2 days
-
-**Activity Feed**
-- Real-time log of who did what: "Anna moved ticket #42 to Done"
-- WebSocket or server-sent events (SSE)
-- Effort: 3 days
+- Team invitation via email
+- Data model change: all resources get `workspace_id` FK
+- Effort: 10 days
 
 ### Enterprise Security
 
 **SSO / SAML**
-- Okta, Azure AD, Google Workspace integration
-- Required for Enterprise procurement
-- Effort: 5 days (plus vendor setup)
+- Okta, Azure AD, Google Workspace
+- Required for enterprise procurement
+- Effort: 5 days + vendor setup
+
+**2FA (TOTP)**
+- TOTP via Google Authenticator / Authy
+- Effort: 2 days
 
 **Audit Log**
-- Append-only log: `user_id`, `action`, `resource`, `timestamp`
-- API: `GET /audit-log` with date range filter
+- Append-only: user_id, action, resource, timestamp
 - Export as CSV for compliance
 - Effort: 3 days
 
-**2FA (TOTP)**
-- TOTP (Google Authenticator compatible)
-- `POST /auth/setup-2fa` → generates QR code
-- `POST /auth/verify-2fa` → validates TOTP code
-- Effort: 2 days
+### API Access
 
-### Analytics & Reporting
-
-**Scheduled Reports**
-- Weekly digest email: top 3 issues, sentiment trend, new clusters
-- Configurable frequency (daily/weekly/monthly)
-- Effort: 3 days
-
-**PDF Export**
-- Executive summary PDF: cover page, KPIs, top issues, AI insight
-- `GET /reports/pdf?datasource_id=...`
-- Effort: 2 days (pdfkit or Playwright)
-
-**API Access**
-- Customers can use MA Analytics API from their own tools
 - Scoped API keys per workspace
 - Rate-limited separately from web UI
+- Enables agency use cases (build own UI on top of MA Analytics data)
 - Effort: 3 days
+
+### Integration Marketplace
+
+- Jira: export ticket with Jira issue creation
+- Slack: weekly digest notification
+- Linear: export ticket
+- Effort: 2 days each
 
 ---
 
 ## 6. Phase 4 — Platform & Scale (Month 9–18)
 
-**Goal:** €50,000 MRR, 100+ customers, platform stability.
-
-**Guiding insight:** At this scale, the bottleneck shifts from features to infrastructure. Every architectural shortcut taken in Phase 1 needs to be paid back.
+**Goal:** €50,000 MRR, 100+ customers.
 
 ### Infrastructure
 
 **Managed PostgreSQL Migration**
-- Move from self-hosted Docker to Neon or Supabase
-- Point-in-time recovery, read replicas, connection pooling (PgBouncer)
-- Zero-downtime migration via logical replication
+- Move from Docker to Neon or Supabase
+- Point-in-time recovery, read replicas, PgBouncer connection pooling
+- Zero-downtime via logical replication
 
 **Horizontal Celery Scaling**
-- Switch from `-P solo` (macOS dev) to `prefork` with KEDA autoscaling
+- Switch from `-P solo` to `prefork` with KEDA autoscaling
 - Scale workers based on Redis queue depth
-- Target: 10 concurrent pipeline jobs at peak
 
 **CDN for Frontend**
-- Move static React build to Cloudflare Pages or Vercel
-- Global edge distribution: <50ms asset load globally
+- Move React build to Cloudflare Pages
 - Backend API stays on server
 
 **Monitoring Stack**
-- Prometheus + Grafana: pipeline throughput, queue depth, API latency p99
-- Sentry: error tracking and alerting
-- Uptime: BetterUptime or Checkly
+- Prometheus + Grafana: pipeline throughput, brief generation latency, queue depth
+- Sentry: error tracking
+- Uptime monitoring: BetterUptime
 
 ### Product Intelligence
 
-**Cross-Customer Benchmarking**
-- Anonymous, aggregated benchmarking: "Your login issue rate vs. top apps in your category"
-- This is the network effect moat — more customers → more valuable benchmarks
-- Legal: requires explicit opt-in, anonymization, privacy review
+**Real-Time Monitoring**
+- Weekly re-scrape + delta analysis
+- Alert when a signal cluster suddenly increases in severity (spike detection)
+- "BMW Login issue severity increased 40% this week"
 
-**LLM Upgrade Path**
-- Current: Groq llama3-8b as optional enhancement
-- Phase 4: Claude Haiku 4.5 as default (superior German language understanding)
-- Fine-tuned cluster labeling (trained on MA Analytics customer data)
+**Validation Loop**
+- Track which briefs the user acted on (exported, shared, saved to Jira)
+- Use those signals to improve generation: which signal combinations lead to actionable outputs
 
-**Predictive Analytics**
-- "Based on current trajectory, this issue will affect 30% more users in 30 days"
-- Requires 6+ months of historical data per customer — hence Phase 4 timing
+**Competitive Intelligence Layer**
+- Index OEM job postings, patent filings, app changelog notes (via scraping)
+- A signal with active OEM hiring behind it = not a third-party opportunity
+- A signal with zero OEM investment = high opportunity
 
 ---
 
@@ -313,12 +276,12 @@ The long-term opportunity is **the intelligence layer**: when enough customers h
 
 | Metric | v1.0 Now | Phase 1.5 | Phase 2 | Phase 3 | Phase 4 |
 |--------|---------|-----------|---------|---------|---------|
-| Paying customers | 0 | 3 | 10 | 50 | 100+ |
-| MRR | €0 | €500 | €2,000 | €10,000 | €50,000+ |
-| NPS | — | ≥40 | ≥50 | ≥55 | ≥60 |
+| Paying customers | 0 | 3 | 15 | 50 | 150+ |
+| MRR | €0 | €500 | €3,000 | €12,000 | €60,000+ |
+| Briefs generated/month | ~20 (internal) | 100 | 500 | 3,000 | 15,000+ |
 | Pipeline success rate | >95% | >98% | >99% | >99.5% | >99.9% |
-| Time-to-first-insight | <10min | <7min | <5min | <3min | <3min |
-| Monthly pipeline runs | — | 50 | 300 | 2,000 | 10,000+ |
+| Brief generation latency | <15s | <15s | <12s | <10s | <8s |
+| Distinct concepts per 10 briefs | 6 | 8 | 9 | 10 | 10 |
 
 ---
 
@@ -330,57 +293,36 @@ Features are prioritized using the **RICE framework**:
 Score = (Reach × Impact × Confidence) / Effort
 ```
 
-| Factor | Definition | Scale |
-|--------|-----------|-------|
-| Reach | How many customers affected per quarter | # of customers |
-| Impact | How much it improves their core metric | 0.25 / 0.5 / 1 / 2 / 3 |
-| Confidence | How sure we are the estimate is right | 20% / 50% / 80% / 100% |
-| Effort | Engineering time in person-weeks | Number |
+**Example — Sub-Signal Taxonomy:**
+- Reach: 10 (every Innovation Lab user benefits)
+- Impact: 3 (directly increases brief diversity — the core quality metric)
+- Confidence: 80% (we've verified that "Updates" dominates all briefs)
+- Effort: 1 week
+- **Score: (10 × 3 × 0.8) / 1 = 24 — high priority**
 
-**Example — Password Reset:**
-- Reach: 10 (every customer eventually needs it)
-- Impact: 3 (blocker for retention)
-- Confidence: 100% (certain it's needed)
+**Example — Drag-and-Drop Kanban:**
+- Reach: 8 (all Kanban users)
+- Impact: 0.5 (nice-to-have, current UI works)
+- Confidence: 100%
 - Effort: 0.5 weeks
-- **Score: (10 × 3 × 1.0) / 0.5 = 60 — high priority**
-
-**Example — PDF Export:**
-- Reach: 3 (enterprise customers with reporting needs)
-- Impact: 1 (nice-to-have, not blocking)
-- Confidence: 50%
-- Effort: 0.5 weeks
-- **Score: (3 × 1 × 0.5) / 0.5 = 3 — low priority**
+- **Score: (8 × 0.5 × 1.0) / 0.5 = 8 — medium priority**
 
 ---
 
-## 9. Feature Flags Strategy
-
-As the product scales, feature flags become essential for:
-1. Rolling out features to subset of customers (beta testing)
-2. A/B testing (does the new dashboard increase engagement?)
-3. Monetization (features gated by pricing tier)
-
-**Phase 1.5:** Simple env-var flags (`GROQ_API_KEY` already acts as a feature flag)
-**Phase 2:** Proper feature flag system (`posthog-python` or `unleash`)
-**Phase 3:** Per-customer feature overrides (enterprise early access)
-
----
-
-## 10. What We Won't Build
-
-Being explicit about what we're NOT building is as important as the roadmap.
+## 9. What We Won't Build
 
 | Feature | Why Not |
 |---------|---------|
-| Mobile app | Desktop tool for professionals; mobile adds cost without addressing pain |
-| Self-hosted enterprise | Engineering overhead too high for one team at this stage |
-| Real-time streaming analytics | Batch analysis (hourly/daily) is sufficient for the use case |
-| Custom ML model training | Pre-trained models (MiniLM, RoBERTa) are good enough; custom training requires 100x more reviews |
-| Social media monitoring (Twitter/X) | Different buyer, different workflow; separate product |
+| Mobile app | Desktop tool for professionals; mobile adds cost without addressing core PM pain |
+| Self-hosted enterprise (air-gapped) | Engineering overhead too high for one team at this stage |
+| Real-time streaming analytics | Batch analysis (hourly/daily) is sufficient; latency isn't the bottleneck |
+| Custom ML model fine-tuning | Pre-trained MiniLM/ABSA are sufficient; custom training needs 10x more data |
+| Social media monitoring (Twitter/X) | Different buyer persona, different workflow — separate product |
 | Survey creation | Not the job to be done; SurveyMonkey does this well |
+| Mobile SDK / in-app feedback collection | Different surface area; out of scope for B2B analytics tool |
 
 ---
 
-*Document Owner: Product Strategy*
-*Last Updated: 2026-07*
-*Status: v1.0 Complete — Phase 1.5 next milestone*
+*Document Owner: Product Strategy*  
+*Last Updated: 2026-07*  
+*Status: v1.0 Complete — Phase 1.5 is the next milestone*

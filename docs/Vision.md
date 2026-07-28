@@ -1,136 +1,99 @@
 # Vision — MA Analytics
 
-> *"The best products don't just solve problems. They eliminate entire categories of pain that people had normalized."*
+## The Problem
+
+Every product team is flying blind.
+
+Features get shipped based on stakeholder pressure, gut feel, and whoever talks loudest in the sprint planning meeting. The voice of the customer — the most valuable signal in product development — is buried in tens of thousands of unread reviews, support tickets, and feedback threads that nobody has time to process systematically.
+
+The result: product roadmaps that don't reflect what users actually need. Wasted engineering cycles. User churn that was predictable but undetected.
+
+This is not a data problem. Companies have more customer data than ever. This is an **intelligence problem** — the gap between "we have reviews" and "we know what to build next."
 
 ---
 
-## 1. The Problem
+## The Core Insight
 
-Every product team in the world is flying blind.
+When you read 10,000 customer reviews, you are reading a distributed product specification. Users are telling you, in plain language, what is broken, what they wish existed, and what they would pay to have.
 
-They ship features based on gut feel, stakeholder pressure, and HiPPO (Highest Paid Person's Opinion). The customer's voice — the single most valuable signal in product development — is trapped in thousands of unread app reviews, support tickets, and feedback forms that nobody has time to process.
+Every 1-star review is an unsubmitted bug report.  
+Every "I wish this app could..." is an unwritten feature request.  
+The patterns across thousands of reviews are the roadmap that no product manager has time to write.
 
-The status quo looks like this:
-
-- A product manager exports 2,000 Google Play reviews into a spreadsheet on a Friday afternoon.
-- She spends the weekend manually tagging them. She finds patterns — login issues, crashes, missing features — but she can't quantify confidence. Is "login bug" a 3% problem or a 40% problem?
-- By Monday, she has a slide deck. By Thursday, the sprint is locked. Her insights influenced nothing.
-
-This is not a data problem. Companies have more customer data than ever.
-
-**This is an intelligence problem.** Raw data is not insight. Volume is not understanding. The gap between "we have feedback" and "we know what to build next" is exactly where MA Analytics lives.
+MA Analytics extracts that specification and makes it queryable, explorable, and generatable.
 
 ---
 
-## 2. The Insight That Changes Everything
+## Current State (July 2026)
 
-When you read 10,000 customer reviews, you are not reading reviews. You are reading a distributed specification of the product your customers actually want.
+The system is production-capable with the following modules fully implemented:
 
-Every negative review is a bug report without a ticket number.
-Every positive review is a feature worth doubling down on.
-Every cluster of similar complaints is a roadmap priority hiding in plain sight.
+**Data pipeline:** Google Play scraper + CSV import → ABSA sentiment extraction → multilingual sentence embeddings → signal classification → KMeans clustering. Processing 33,649 reviews from 5 automotive apps (BMW, Mercedes-Benz, Audi, Volkswagen) with 41,620 extracted signals across 25 feature categories.
 
-The problem is: no human can read 10,000 reviews and maintain coherent pattern recognition. The human brain loses signal after ~50 data points. After that, confirmation bias takes over — you find what you were already looking for.
+**Innovation Lab:** The primary intelligence output module. Takes structured signals and generates data-backed product briefs through:
+- Hypothesis-guided RAG retrieval: semantic search over 32,300 embedded reviews to find evidence for a user-supplied hypothesis before signal aggregation
+- Signal graph analysis: identifies hub signals (systemic OEM infrastructure problems) vs. edge signals (standalone product opportunities)
+- Signal exclusion: automatic or manual exclusion of previously-explored signal clusters to force exploration of new product territory
+- Multi-provider AI generation: Claude Haiku primary, Groq cascade fallback
+- Long-form concept documentation: 1200+ word strategic product documents
+- PDF export, Copilot chat, brief history
 
-Machine learning doesn't have this problem.
+**Hybrid search:** Semantic vector search + BM25 full-text search fused via Reciprocal Rank Fusion over all review content.
 
-MA Analytics applies state-of-the-art NLP — sentence embeddings, semantic clustering, sentiment classification — to transform unstructured customer feedback into structured, actionable product intelligence. Automatically. In minutes.
+**Document intelligence:** PDF ingestion (CSDDD, CSRD, regulatory documents), chunk embedding, RAG Q&A, structured metric extraction.
 
----
-
-## 3. The Solution
-
-MA Analytics is a **Voice of Customer Intelligence Platform** that turns raw customer feedback into prioritized product decisions.
-
-**In one sentence:** Connect your app → get AI-generated insights about what's broken and what's working → act on them.
-
-**What it does, specifically:**
-
-1. **Ingests** reviews from Google Play (API) or any source (CSV upload)
-2. **Understands** sentiment using transformer-based NLP models (not keyword matching — actual semantic understanding)
-3. **Clusters** reviews by topic using sentence embeddings + KMeans, revealing the true distribution of customer pain
-4. **Surfaces** the top issues and strengths with supporting evidence (real quotes from real customers)
-5. **Generates** AI-powered executive summaries, ticket drafts, and customer reply templates
-6. **Organizes** everything into a Kanban-style workflow so teams can act immediately
-
-The output is not a report. It is a **decision-ready briefing** that a product manager can act on in 15 minutes.
+**Inbox + Kanban:** Customer message management with AI reply generation and ticket tracking.
 
 ---
 
-## 4. Why Now
+## What the System Is Good At
 
-Three forces have converged to make this the right moment:
-
-**1. The LLM Revolution**
-Large language models (Groq/llama3, GPT-4, etc.) have crossed the threshold of being genuinely useful for text summarization and generation. Two years ago, the summaries were generic and unreliable. Today, they are consistently good enough to save 2-3 hours of PM work per sprint.
-
-**2. The Embedding Model Maturity**
-Sentence transformers (all-MiniLM-L6-v2, etc.) have become fast, accurate, and free to run locally. Semantic similarity — understanding that "can't log in" and "authentication error" are the same problem — is now a solved problem at commodity cost.
-
-**3. The App Review Volume Explosion**
-The average mobile app now receives 100-10,000 new reviews per month. The signal-to-noise ratio has not improved — if anything, it's gotten worse. Product teams are more overwhelmed than ever.
-
-The technology is ready. The problem is acute. The market is underserved.
+- Finding the strongest recurring pain patterns across large review datasets
+- Differentiating between signals that are OEM infrastructure problems (hard to productise for third parties) vs. standalone product opportunities
+- Generating structured, evidence-backed product briefs faster than a human researcher
+- Exploring different product territories by steering signal selection
+- Answering semantic questions over regulatory documents
 
 ---
 
-## 5. Target Users
+## What the System Is Not Good At (Known Limitations)
 
-**Primary: Product Managers at mobile-first companies**
-- They own the roadmap
-- They're drowning in feedback
-- They need evidence to justify prioritization decisions to stakeholders
-- They're currently spending 4-8 hours/month manually processing reviews
+**Signal resolution is coarse.** 25 feature labels for 33,649 reviews means each label covers a wide range of user problems. "Updates" includes OTA failures, data loss on update, UI changes after update, and slow update download times — all different product opportunities.
 
-**Secondary: Customer Success Managers**
-- They handle incoming complaints
-- They need to respond quickly with empathy
-- They want to escalate systemic issues to the product team
-- They currently context-switch between 5 tools to do this
+**Reviews are a biased sample.** App store reviewers skew toward extreme experiences (very happy or very angry). The silent majority — users who find the app adequate — leave no reviews. Signal extraction reflects the complaining 5%, not the full user base.
 
-**Tertiary: Founders / CEOs of early-stage startups**
-- They are both PM and CS
-- They have zero time
-- They need signal fast
-- A 15-minute weekly briefing from MA Analytics replaces a full analyst
+**No go-to-market validation.** Generated briefs describe what users want; they don't validate whether the market will pay, whether OEMs are already building it internally, or whether a startup can realistically compete. The LLM generates plausible-sounding market sizing that has no empirical basis.
+
+**Scope is narrow.** Five German premium OEM apps are a highly correlated dataset. The signals cluster around shared platform problems rather than diverse product opportunities. Cross-industry, cross-geography comparisons would surface genuinely novel patterns.
+
+**No feedback loop.** The system doesn't learn from which briefs the user found valuable, which hypotheses led to better outputs, or which signal combinations produced actionable insights.
 
 ---
 
-## 6. The 5-Year Vision
+## Where This Is Going
 
-**Year 1 (Now):** Single-app, single-user intelligence. Connect one Google Play app, get insights. The MVP that proves the core value proposition.
+**Near-term (next capabilities that would materially increase intelligence quality):**
 
-**Year 2:** Multi-app portfolio management. Compare sentiment trends across your entire app portfolio. Competitor intelligence (analyze any public app). Team collaboration (multiple users per workspace).
+1. **Finer signal taxonomy** — Sub-classify each of the 25 current labels into 5–10 sub-signals. "Updates" becomes "OTA failure," "data loss on update," "update notification spam," etc. This increases concept diversity without changing the data layer.
 
-**Year 3:** Real-time monitoring. Sentiment alerts when a new app version tanks ratings. Integration with Slack, Jira, Linear — insights flow directly into existing workflows without context switching.
+2. **Cross-source intelligence** — Link review signals to regulatory documents. "Users complain about data deletion after updates" + "GDPR Article 17 right to erasure obligation" = a compliance-driven product opportunity. The data layers exist; the cross-referencing doesn't.
 
-**Year 4:** Predictive intelligence. "Based on the pattern of complaints in the last 30 days, churn is likely to increase by 12% unless the login flow is fixed." Proactive rather than reactive.
+3. **Competitive intelligence layer** — Index OEM job postings, patent filings, app changelog notes. A signal that has an active OEM hiring effort behind it is not a product opportunity for a third party. A signal with no internal OEM investment is.
 
-**Year 5:** The operating system for customer-centric product development. Every product decision in the company is grounded in real customer signal. MA Analytics becomes the connective tissue between customers and product teams.
+**Medium-term (platform direction):**
 
----
+4. **Multi-source ingestion** — Apple App Store, Twitter/X mentions, Reddit threads, support ticket exports. Reviews are one input; the full customer voice is distributed across multiple channels.
 
-## 7. The Core Belief
+5. **Real-time monitoring** — Weekly re-scrape + delta analysis. Alert when a new signal cluster emerges or a known signal suddenly spikes in severity.
 
-We believe that the companies that win in the next decade will be the ones that best understand their customers — not the ones with the biggest marketing budget or the most engineers.
-
-Understanding customers at scale requires intelligence infrastructure. MA Analytics is that infrastructure.
-
-The best product teams don't guess. They know.
+6. **Validation loop** — Track which generated briefs led to user action (saved, exported, shared, built). Use that signal to improve generation quality over time.
 
 ---
 
-## 8. Success Metrics
+## The Long-Term Opportunity
 
-MA Analytics will have succeeded when:
+The automotive software market is converging on a common problem: manufacturers built mechanical products for 100 years and are now expected to ship competitive software products. Their software teams are small relative to their hardware teams. Their app store ratings reflect this gap.
 
-- A PM can go from "raw reviews" to "sprint-ready priorities" in under 20 minutes
-- Customer-reported issues reach the development team within 24 hours of emerging
-- Product teams using MA Analytics ship features that increase retention measurably more than teams who don't
-- "What are customers saying?" is a question that takes seconds to answer, not days
+MA Analytics sits at the intersection of this gap: large volumes of explicit user frustration, structured into signal categories, queryable by semantic search, exploitable through AI-generated product concepts.
 
----
-
-*Document Owner: Product*
-*Last Updated: 2026-07*
-*Status: Living Document*
+The opportunity is not to build the product for the OEMs. The opportunity is to be the intelligence layer that tells founders, investors, and product teams: here is what users of the largest automotive apps in the world actually need, here is the evidence, and here is a product concept that could address it.

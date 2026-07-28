@@ -235,7 +235,26 @@ export const intelligenceApi = {
 }
 
 // Innovation
+export interface SignalInfo {
+  feature: string
+  total_mentions: number
+  fr_mentions: number
+  bug_mentions: number
+  app_count: number
+  avg_severity: number
+}
+
 export const innovationApi = {
+  fetchSignals: async (body: {
+    mode: string
+    scope: string
+    industry?: string
+    datasource_ids?: string[]
+    market?: string
+  }) => {
+    const { data } = await apiClient.post('/innovation/signals', body)
+    return data as SignalInfo[]
+  },
   generate: async (body: {
     mode: string
     scope: string
@@ -243,6 +262,7 @@ export const innovationApi = {
     datasource_ids?: string[]
     market?: string
     user_hypothesis?: string
+    excluded_signals?: string[]
   }) => {
     const { data } = await apiClient.post('/innovation/generate', body)
     return data
@@ -257,6 +277,10 @@ export const innovationApi = {
   },
   deleteBrief: async (id: string) => {
     await apiClient.delete(`/innovation/briefs/${id}`)
+  },
+  generateConcept: async (id: string) => {
+    const { data } = await apiClient.post(`/innovation/briefs/${id}/generate-concept`)
+    return data as { concept_description: string }
   },
   chat: async (briefId: string, body: {
     message: string

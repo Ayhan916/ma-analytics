@@ -1,636 +1,398 @@
 # API Reference — MA Analytics
 
-> *"A great API is a product. It has a target customer (developers), a value proposition (making their job easier), and a UX (consistency, predictability, clarity). Design it like a product, not like an implementation detail."*
+**Base URL:** `http://localhost:8000` (development)  
+**Auth:** HTTP-only cookie (`access_token`). Set automatically on login.  
+**Content-Type:** `application/json` for all requests and responses.  
+**OpenAPI UI:** `http://localhost:8000/docs` (requires `DEBUG=true`)
 
 ---
 
-## 1. Overview
-
-**Base URL:** `http://localhost:8001` (development) | `https://api.your-domain.com` (production)
-
-**Authentication:** Bearer token (JWT). Include in all protected requests:
-```
-Authorization: Bearer <access_token>
-```
-
-**Content-Type:** `application/json` for all requests and responses.
-
-**API Versioning:** Currently unversioned. Breaking changes will be introduced with `/v2/` prefix.
-
-**Rate Limits:**
-- `POST /auth/register` — 10 requests/minute per IP
-- `POST /auth/login` — 20 requests/minute per IP
-- All other endpoints — 200 requests/minute per IP
-
-**OpenAPI Docs:** Available at `/docs` when `DEBUG=true`.
-
----
-
-## 2. Error Format
-
-All errors follow a consistent format:
-
-```json
-{
-  "detail": "Human-readable error message",
-  "errors": [
-    {
-      "field": "email",
-      "msg": "value is not a valid email address"
-    }
-  ]
-}
-```
-
-`errors` array is only present for validation errors (HTTP 422).
-
-**HTTP Status Codes Used:**
-
-| Code | Meaning |
-|------|---------|
-| `200` | Success (GET, PATCH) |
-| `201` | Created (POST) |
-| `204` | No Content (DELETE) |
-| `400` | Bad Request (business logic violation) |
-| `401` | Unauthorized (missing or invalid token) |
-| `404` | Not Found |
-| `422` | Unprocessable Entity (validation error) |
-| `429` | Too Many Requests (rate limited) |
-| `500` | Internal Server Error |
-
----
-
-## 3. Authentication
+## Authentication
 
 ### POST /auth/register
-
-Create a new user account.
-
-**Rate limit:** 10/minute
+Register a new user account.
 
 **Request:**
 ```json
-{
-  "email": "user@example.com",
-  "password": "securepassword123",
-  "full_name": "Max Mustermann"
-}
+{ "email": "user@example.com", "password": "securepassword" }
 ```
-
-**Validation:**
-- `email` — valid email format, must be unique
-- `password` — minimum 8 characters
-- `full_name` — optional
-
-**Response 201:**
+**Response 200:**
 ```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
+{ "id": "uuid", "email": "user@example.com" }
 ```
-
-**Errors:**
-- `400 Email already registered` — email exists
-- `400 Password must be at least 8 characters`
-
----
 
 ### POST /auth/login
-
-Authenticate and receive an access token.
-
-**Rate limit:** 20/minute
+Authenticate and receive JWT cookies.
 
 **Request:**
 ```json
-{
-  "email": "user@example.com",
-  "password": "securepassword123"
-}
+{ "email": "user@example.com", "password": "securepassword" }
 ```
-
-**Response 200:**
+**Response 200:** Sets `access_token` (15 min) and `refresh_token` (7 days) as HTTP-only cookies.
 ```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
+{ "message": "Login successful" }
 ```
 
-**Errors:**
-- `401 Invalid credentials` — wrong email or password (intentionally vague to prevent user enumeration)
+### POST /auth/logout
+Clear auth cookies.
 
----
+### POST /auth/refresh
+Exchange refresh token for a new access token. Called automatically by the frontend on 401.
 
 ### GET /auth/me
-
-Get the current authenticated user's profile.
-
-**Auth:** Required
-
-**Response 200:**
+Returns the currently authenticated user.
 ```json
-{
-  "id": "3bd9dccc-36fb-4373-8f0f-19eef6ae56ed",
-  "email": "user@example.com",
-  "full_name": "Max Mustermann"
-}
+{ "id": "uuid", "email": "user@example.com" }
 ```
 
-**Token expiry:** Tokens expire after 24 hours. A `401` response on this endpoint means the token has expired — the client should redirect to `/login`.
+### POST /auth/password-reset-request
+Send a password reset email.
+```json
+{ "email": "user@example.com" }
+```
+
+### POST /auth/password-reset
+Reset password using token from email.
+```json
+{ "token": "reset-token", "new_password": "newpassword" }
+```
 
 ---
 
-## 4. Data Sources
+## Data Sources
 
-### POST /datasources/google-play
-
-Create a new Google Play data source and immediately trigger scraping + ML pipeline.
-
-**Auth:** Required
-
-**Request:**
+### GET /datasources/
+List all data sources for the authenticated user.
 ```json
-{
-  "name": "BMW Connected",
+[{
+  "id": "uuid",
+  "name": "My BMW App",
   "app_id": "de.bmw.connected",
-  "count": 200,
-  "lang": "de",
-  "country": "de"
-}
+  "industry": "Automotive",
+  "job_status": "done",
+  "job_id": "celery-task-id",
+  "review_count": 8234,
+  "created_at": "2026-07-01T10:00:00Z"
+}]
 ```
 
-**Field reference:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | ✅ | Display name for the data source |
-| `app_id` | string | ✅ | Play Store App ID (e.g. `de.bmw.connected`) or full Play Store URL |
-| `count` | integer | ❌ | Number of reviews to scrape. Default: 200. Options: 50, 100, 200, 500 |
-| `lang` | string | ❌ | Review language code. Default: `de`. Options: `de`, `en`, `fr`, `es` |
-| `country` | string | ❌ | Store country code. Default: `de`. Options: `de`, `us`, `gb`, `at`, `ch` |
-
-**Note:** `app_id` accepts full Play Store URLs. The API automatically extracts the `id=` parameter.
-
-**Response 201:**
+### POST /datasources/
+Create a data source by Google Play App ID.
 ```json
-{
-  "id": "de6e6e9c-9ebe-4a02-8d30-abfb5be6f986",
-  "name": "BMW Connected",
-  "type": "google_play",
-  "app_id": "de.bmw.connected",
-  "job_id": "05a1eb2a-074d-4cfc-8e4a-369b7790c0b4",
-  "job_status": "pending",
-  "review_count": 0,
-  "last_synced": null
-}
+{ "app_id": "de.bmw.connected", "industry": "Automotive", "name": "My BMW App" }
 ```
 
-**Behavior:** Returns immediately. The `job_id` should be used to poll `GET /jobs/{job_id}` for pipeline progress.
+### GET /datasources/{id}
+Get a single data source with detailed stats.
 
----
+### DELETE /datasources/{id}
+Delete a data source and all associated reviews, signals, clusters.
+
+### POST /datasources/{id}/scrape
+Trigger the ML pipeline for a data source. Returns immediately; pipeline runs in background.
+```json
+{ "task_id": "celery-task-id" }
+```
 
 ### POST /datasources/upload-csv
+Upload a CSV file of reviews. Triggers the ML pipeline automatically.
 
-Upload a CSV file and trigger the ML pipeline on its contents.
-
-**Auth:** Required
-
-**Content-Type:** `multipart/form-data`
-
-**Form fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | ✅ | Display name for the data source |
-| `file` | file | ✅ | CSV file. Max size: 10MB |
-| `text_col` | string | ❌ | Column name for review text. Default: `content` |
-| `score_col` | string | ❌ | Column name for star rating (1-5). Default: `score` |
-| `date_col` | string | ❌ | Column name for review date. Default: `at` |
-| `version_col` | string | ❌ | Column name for app version. Default: `reviewCreatedVersion` |
-
-**Expected CSV format (default columns):**
-```csv
-content,score,at,reviewCreatedVersion
-"Gute App, funktioniert gut",5,2024-01-15,3.2.1
-"Login funktioniert nicht",1,2024-01-16,3.2.1
-```
-
-**Response 201:** Same format as Google Play response.
+**Form fields:** `file` (CSV), `name` (string), `industry` (string)
 
 ---
 
-### GET /datasources
+## Jobs
 
-List all data sources for the authenticated user.
-
-**Auth:** Required
-
-**Response 200:**
+### GET /jobs/{task_id}
+Poll Celery task status.
 ```json
-[
-  {
-    "id": "98c2c412-a28a-42ff-8026-868f5f74f6b9",
-    "name": "BMW Test v2",
-    "type": "google_play",
-    "app_id": "de.bmw.connected",
-    "job_id": "55723fe9-3a5d-4424-b919-c4bfddbcab2b",
-    "job_status": "done",
-    "review_count": 50,
-    "last_synced": "2026-07-22T17:23:55.246878+00:00"
-  }
-]
+{ "task_id": "...", "status": "running", "progress": 65, "message": "Generating embeddings..." }
 ```
-
-**Sorted:** By `created_at` descending (newest first).
+Status values: `pending` | `running` | `done` | `failed`
 
 ---
 
-### DELETE /datasources/{datasource_id}
+## Dashboard
 
-Delete a data source and all associated data (reviews, clusters, jobs).
+### GET /dashboard/
+Returns aggregated KPIs, top signals, cluster summary, and AI-generated narrative for all data sources.
 
-**Auth:** Required
+```json
+{
+  "total_reviews": 33649,
+  "total_apps": 5,
+  "top_issues": [{"feature": "Updates", "count": 3585, "severity": 4.6}],
+  "top_strengths": [...],
+  "clusters": [...],
+  "ai_narrative": "Nutzer von Premium-Fahrzeug-Apps kämpfen vor allem mit..."
+}
+```
 
-**Response 204:** No content.
+---
+
+## Innovation Lab
+
+### POST /innovation/signals
+Returns all available signal clusters for the given filter scope. Used by the Signal-Steuerung panel in the UI.
+
+**Request:** Same body as `/innovation/generate` (without `excluded_signals`).
+```json
+{ "mode": "competitor", "scope": "all" }
+```
+
+**Response:**
+```json
+[{
+  "feature": "Updates",
+  "total_mentions": 3585,
+  "fr_mentions": 214,
+  "bug_mentions": 3078,
+  "app_count": 5,
+  "avg_severity": 4.6
+}]
+```
+
+### POST /innovation/generate
+Generate a full Innovation Brief. Saves to DB automatically and returns the saved brief.
+
+**Request:**
+```json
+{
+  "mode": "competitor",
+  "scope": "all",
+  "industry": null,
+  "datasource_ids": null,
+  "market": "de",
+  "user_hypothesis": "Fahrer wollen Software-Updates ohne Werkstattbesuch",
+  "excluded_signals": ["Updates", "Account"]
+}
+```
+
+- `mode`: `"competitor"` (attack existing app weaknesses) | `"innovation"` (find unoccupied market gaps)
+- `scope`: `"all"` | `"industry"` (requires `industry`) | `"datasource"` (requires `datasource_ids`)
+- `excluded_signals`: Optional. If `null`, auto-excludes signals from previous briefs. If `[]`, no exclusion. If list, excludes those signals.
+- `user_hypothesis`: Optional. If provided, enables hypothesis-guided RAG retrieval (semantic search over reviews before signal aggregation).
+
+**Response:** `SavedBriefFull` — see GET /innovation/briefs/{id}.
 
 **Errors:**
-- `404 DataSource not found` — does not exist or belongs to another user
+- `422` — Not enough data for the given filter
+- `429` — All AI providers rate-limited
+- `500` — AI response could not be parsed
 
----
+### GET /innovation/briefs
+List all saved Innovation Briefs (metadata only, no full content).
 
-## 5. Pipeline Jobs
+```json
+[{
+  "id": "uuid",
+  "created_at": "2026-07-27T19:00:00Z",
+  "mode": "competitor",
+  "scope": "all",
+  "product_name": "TrustSync",
+  "tagline": "Fahrzeugdaten, die wirklich aktualisieren...",
+  "risk_level": "mittel",
+  "total_demand": 892,
+  "apps_analyzed": 5,
+  "user_hypothesis": null,
+  "industry": null
+}]
+```
 
-### GET /jobs/{job_id}
+### GET /innovation/briefs/{id}
+Get a single saved brief with full content.
 
-Get the current status of a pipeline job. Used by the frontend for progress polling.
-
-**Auth:** Required
-
-**Response 200:**
 ```json
 {
-  "id": "55723fe9-3a5d-4424-b919-c4bfddbcab2b",
-  "datasource_id": "98c2c412-a28a-42ff-8026-868f5f74f6b9",
-  "status": "done",
-  "progress": "done",
-  "review_count": 50,
-  "error": null
+  "id": "uuid",
+  "created_at": "...",
+  "mode": "competitor",
+  "scope": "all",
+  "product_name": "TrustSync",
+  "tagline": "...",
+  "core_problem": "...",
+  "market_gap": "...",
+  "features": [{ "name": "OTA-Updates ohne Werkstatt", "mentions": 214, "priority": "hoch" }],
+  "target_audience": "...",
+  "differentiation": "...",
+  "risk": "...",
+  "risk_level": "mittel",
+  "hypothesis_check": null,
+  "hypothesis_alignment": null,
+  "total_demand": 892,
+  "apps_analyzed": 5,
+  "sources": [{ "feature": "Updates", "fr_mentions": 214, "total_mentions": 3585, ... }],
+  "concept_description": "# TrustSync — Produktkonzeptdokumentation\n..."
 }
 ```
 
-**Status values:**
+### DELETE /innovation/briefs/{id}
+Delete a saved brief.
 
-| Status | Meaning |
-|--------|---------|
-| `pending` | Task queued in Redis, not yet picked up by worker |
-| `running` | Worker is actively processing |
-| `done` | Pipeline completed successfully |
-| `failed` | Pipeline encountered an error |
+### POST /innovation/briefs/{id}/generate-concept
+Generate (or regenerate) the long-form concept description for a saved brief. Updates the brief in place.
 
-**Progress stages (during `running` status):**
+**Response:**
+```json
+{ "concept_description": "# ProductName — Produktkonzeptdokumentation\n..." }
+```
 
-| Progress | Meaning |
-|----------|---------|
-| `scraping` | Fetching reviews from Google Play |
-| `saving_reviews` | Storing reviews in database |
-| `analyzing_sentiment` | Running sentiment classification |
-| `creating_embeddings` | Generating sentence embeddings |
-| `clustering` | Running KMeans clustering |
-| `done` | All steps completed |
+### POST /innovation/briefs/{id}/chat
+Copilot chat about a saved brief. Sends conversation history and gets an AI response.
 
-**Polling recommendation:** Poll every 4 seconds while `status` is `pending` or `running`. Stop when `done` or `failed`.
-
----
-
-## 6. Dashboard
-
-### GET /dashboard/summary
-
-Get a complete summary for a data source: KPIs, top issues, top strengths.
-
-**Auth:** Required
-
-**Query parameters:**
-- `datasource_id` (required) — UUID of the data source
-
-**Response 200:**
+**Request:**
 ```json
 {
-  "datasource_id": "98c2c412-a28a-42ff-8026-868f5f74f6b9",
-  "datasource_name": "BMW Test v2",
-  "review_count": 50,
-  "avg_rating": 2.82,
-  "sentiment": {
-    "positive": 23,
-    "negative": 25,
-    "neutral": 2,
-    "total": 50
-  },
-  "top_issues": [
-    {
-      "id": "0c8f22b9-9931-40b7-9a84-21b02554da9a",
-      "label": "login / nicht / möglich",
-      "mentions": 11,
-      "summary": "11 reviews mention this issue.",
-      "examples": [
-        "Anmeldung nicht möglich.. Peinliche app",
-        "Kein Login mehr möglich."
-      ]
-    }
-  ],
-  "top_strengths": [
-    {
-      "id": "8aa2efa6-61b1-4a24-a617-f077ada6d769",
-      "label": "super / app / einwandfrei",
-      "mentions": 10,
-      "summary": "10 reviews mention this strength.",
-      "examples": [
-        "super App, funktioniert einwandfrei, Daumen hoch"
-      ]
-    }
+  "message": "Was wäre ein realistischer Preis für dieses Produkt?",
+  "history": [
+    { "role": "user", "content": "..." },
+    { "role": "assistant", "content": "..." }
   ]
 }
 ```
-
-**Notes:**
-- `top_issues` and `top_strengths` are sorted by `mentions` descending
-- Max 5 items each
-- `examples` contains up to 5 real review quotes
-
----
-
-### GET /dashboard/issues
-
-Get all issue clusters for a data source.
-
-**Auth:** Required
-
-**Query parameters:**
-- `datasource_id` (required)
-
-**Response 200:** Array of cluster objects (same structure as `top_issues` above), all issues, sorted by mentions descending.
+**Response:**
+```json
+{ "reply": "Basierend auf dem Zielmarkt..." }
+```
 
 ---
 
-### GET /dashboard/strengths
+## Search
 
-Get all strength clusters for a data source.
+### POST /search/
+Hybrid semantic + full-text search over all reviews.
 
-**Auth:** Required
-
-**Query parameters:**
-- `datasource_id` (required)
-
-**Response 200:** Array of cluster objects, all strengths, sorted by mentions descending.
-
----
-
-### GET /dashboard/insight
-
-Get an AI-generated executive summary for a data source.
-
-**Auth:** Required
-
-**Query parameters:**
-- `datasource_id` (required)
-
-**Response 200:**
+**Request:**
 ```json
 {
-  "insight": "50 reviews analyzed: 46% positive sentiment. Main issue: 'login / nicht / möglich' (11 mentions). Top strength: 'super / app / einwandfrei' (10 mentions).",
-  "generated_by": "rule-based"
+  "query": "Bluetooth verbindung verliert sich ständig",
+  "search_type": "hybrid",
+  "datasource_ids": ["uuid1", "uuid2"],
+  "limit": 20,
+  "min_score": 1.0,
+  "max_score": 3.0,
+  "language": "de"
 }
 ```
 
-**`generated_by` values:**
-- `groq` — Groq LLM generated the insight (higher quality, requires `GROQ_API_KEY`)
-- `rule-based` — Template-based generation (always available)
+- `search_type`: `"hybrid"` (default, RRF fusion) | `"vector"` | `"fulltext"`
+- `datasource_ids`: Filter to specific apps. Omit for all apps.
+- `min_score` / `max_score`: Filter by star rating (1.0–5.0)
+- `language`: `"de"` | `"en"` | omit for all
+
+**Response:**
+```json
+[{
+  "id": "review-uuid",
+  "content": "Bluetooth bricht nach jedem Update ab...",
+  "score": 1.0,
+  "sentiment": "negative",
+  "datasource_name": "My BMW App",
+  "reviewed_at": "2026-01-15T...",
+  "similarity": 0.87
+}]
+```
 
 ---
 
-## 7. Tickets
+## Intelligence (Document RAG)
 
-### GET /tickets
+### POST /intelligence/upload
+Upload a PDF document for indexing and RAG.
 
+**Form fields:** `file` (PDF), `title` (string), `doc_type` (e.g. "regulation"), `year` (int)
+
+### GET /intelligence/documents
+List all indexed documents.
+
+### POST /intelligence/query
+Ask a question over indexed documents.
+
+**Request:**
+```json
+{
+  "question": "Was sind die Kernpflichten aus der CSDDD?",
+  "doc_ids": ["uuid1"]
+}
+```
+**Response:**
+```json
+{
+  "answer": "Die CSDDD verpflichtet Unternehmen zu...",
+  "sources": [{ "doc_title": "CSDDD 2024", "page": 12, "chunk": "..." }]
+}
+```
+
+### POST /intelligence/extract-all
+Trigger batch metric extraction from all indexed documents. Extracts Scope 1/2/3 emissions, reduction targets, regulatory obligations.
+
+---
+
+## Messages (Inbox)
+
+### GET /messages/
+List customer messages with pagination.
+
+### POST /messages/
+Create a new message (manual entry).
+
+### PUT /messages/{id}
+Update message status (`new` → `in_progress` → `resolved`).
+
+### POST /messages/{id}/generate-reply
+Generate an AI reply for a customer message.
+```json
+{ "reply": "Vielen Dank für Ihre Nachricht..." }
+```
+
+### POST /messages/{id}/create-ticket
+Create a Kanban ticket from a message.
+
+---
+
+## Tickets (Kanban)
+
+### GET /tickets/
 List all tickets for the authenticated user.
 
-**Auth:** Required
-
-**Query parameters:**
-- `status` (optional) — Filter by status: `Backlog`, `Todo`, `In Progress`, `Done`
-- `priority` (optional) — Filter by priority: `High`, `Medium`, `Low`
-
-**Response 200:**
-```json
-[
-  {
-    "id": "8846f96a-e0ad-40db-a8cc-3289588fab73",
-    "title": "Login-Bug beheben",
-    "description": "Nutzer können sich nicht einloggen (Authentifizierungsfehler)",
-    "priority": "High",
-    "status": "In Progress",
-    "customer_name": null,
-    "labels": ["bug", "auth"],
-    "subtasks": [],
-    "comments": [],
-    "created_at": "2026-07-22T17:31:04.000824+00:00",
-    "updated_at": "2026-07-22T17:31:22.000000+00:00"
-  }
-]
-```
-
-**Sorted:** By `created_at` descending.
-
----
-
-### POST /tickets
-
-Create a new ticket.
-
-**Auth:** Required
-
-**Request:**
+### POST /tickets/
+Create a ticket.
 ```json
 {
-  "title": "Login-Bug beheben",
-  "description": "Nutzer können sich nicht einloggen",
-  "priority": "High",
-  "status": "Backlog",
-  "customer_name": "Max Mustermann",
-  "labels": ["bug", "auth"],
-  "subtasks": [
-    {"text": "Reproduce the error", "done": false},
-    {"text": "Fix authentication flow", "done": false}
-  ]
+  "title": "Bluetooth Verbindungsabbrüche untersuchen",
+  "description": "...",
+  "priority": "high",
+  "status": "backlog"
 }
 ```
 
-**Response 201:** Full ticket object.
+### PUT /tickets/{id}
+Update ticket (title, description, priority, status, assignee).
+
+### DELETE /tickets/{id}
+Delete a ticket.
 
 ---
 
-### PATCH /tickets/{ticket_id}
+## Health
 
-Update any fields of a ticket. Only provided fields are updated (partial update).
+### GET /health/
+Returns `{ "status": "ok" }`. Used for deployment health checks.
 
-**Auth:** Required
+---
 
-**Request (all fields optional):**
+## Error Format
+
+All errors follow a consistent format:
 ```json
-{
-  "title": "Updated title",
-  "description": "Updated description",
-  "priority": "Medium",
-  "status": "In Progress",
-  "customer_name": "Max Mustermann",
-  "labels": ["bug"],
-  "subtasks": [{"text": "Task 1", "done": true}],
-  "comments": ["Fixed in v3.2.2"]
-}
+{ "detail": "Human-readable error message in German or English" }
 ```
 
-**Response 200:** Updated ticket object.
-
----
-
-### DELETE /tickets/{ticket_id}
-
-Delete a ticket permanently.
-
-**Auth:** Required
-
-**Response 204:** No content.
-
----
-
-## 8. Messages
-
-### GET /messages
-
-List all customer messages for the authenticated user.
-
-**Auth:** Required
-
-**Response 200:**
-```json
-[
-  {
-    "id": "8fa0594d-0791-4c1e-bc84-c5e9587a1453",
-    "name": "Max Mustermann",
-    "email": "max@example.com",
-    "text": "Ich kann mich seit 2 Wochen nicht einloggen. Das ist sehr frustrierend!",
-    "sentiment": "negative",
-    "created_at": "2026-07-22T17:31:16.104898+00:00"
-  }
-]
-```
-
-**Sorted:** By `created_at` descending (newest first).
-
----
-
-### POST /messages
-
-Create a new customer message. Sentiment is automatically detected.
-
-**Auth:** Required
-
-**Request:**
-```json
-{
-  "name": "Max Mustermann",
-  "email": "max@example.com",
-  "text": "Ich kann mich seit 2 Wochen nicht einloggen. Das ist sehr frustrierend!"
-}
-```
-
-**Response 201:** Full message object with auto-detected `sentiment`.
-
----
-
-### POST /messages/{message_id}/generate-reply
-
-Generate an AI-powered reply suggestion for a customer message.
-
-**Auth:** Required
-
-**Request:** No body required.
-
-**Response 200:**
-```json
-{
-  "reply": "Thank you for reaching out! We're sorry to hear you're experiencing login issues. Our team is actively investigating this problem. Please expect an update within 24 hours.",
-  "generated_by": "groq"
-}
-```
-
-**`generated_by` values:**
-- `groq` — LLM-generated, personalized to the message content
-- `rule-based` — Template based on message sentiment (fallback)
-
----
-
-### POST /messages/{message_id}/generate-tickets
-
-Generate and create Jira-style tickets from a customer message using AI.
-
-**Auth:** Required
-
-**Request:** No body required.
-
-**Response 200:**
-```json
-{
-  "tickets": [
-    {
-      "title": "Fix authentication error on login",
-      "description": "Customer reports being unable to log in for 2 weeks. Error occurs despite correct credentials.",
-      "priority": "High"
-    }
-  ],
-  "created": 1
-}
-```
-
-**Behavior:**
-- Creates 1-3 tickets in the database (immediately visible in Kanban Board)
-- Groq LLM used if API key configured; falls back to rule-based single ticket
-- Ticket inherits `customer_name` from the message
-- All tickets created with `status: Backlog`
-
----
-
-## 9. Health
-
-### GET /health
-
-Health check endpoint. Used by load balancers, Docker health checks, and monitoring.
-
-**Auth:** Not required
-
-**Response 200:**
-```json
-{
-  "status": "ok",
-  "service": "MA Analytics API"
-}
-```
-
----
-
-## 10. Response Headers
-
-Every response includes:
-
-| Header | Value | Description |
-|--------|-------|-------------|
-| `X-Request-ID` | `a1b2c3d4` (8-char hex) | Unique ID for this request — use for log correlation |
-| `Content-Type` | `application/json` | Always JSON |
-
----
-
-*Document Owner: Engineering / API Design*
-*Last Updated: 2026-07*
-*Status: v1.0 — All endpoints implemented and tested*
+Common HTTP status codes:
+- `400` — Bad request / validation error
+- `401` — Not authenticated
+- `403` — Forbidden (wrong user)
+- `404` — Resource not found
+- `422` — Unprocessable entity (not enough data, validation failed)
+- `429` — Rate limit reached (auth endpoints or AI providers)
+- `500` — Internal server error
