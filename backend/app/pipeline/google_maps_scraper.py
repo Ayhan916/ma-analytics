@@ -78,7 +78,11 @@ def search_businesses(
     max_results: int = 20,
     keyword: str = "",
 ) -> List[BusinessResult]:
-    """Search Google Maps for businesses near a postal code."""
+    """Search Google Maps for businesses near a postal code.
+
+    Extracts all data directly from the feed DOM — no per-card navigation,
+    so the whole search completes in ~20-40 seconds instead of minutes.
+    """
     from playwright.sync_api import sync_playwright
 
     results: List[BusinessResult] = []
@@ -106,32 +110,32 @@ def search_businesses(
             url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}"
             log.info("maps_search_start", query=query, url=url)
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            _sleep()
 
-            # Accept cookies if dialog appears
+            # Accept cookies
             try:
-                accept = page.locator("button:has-text('Alle akzeptieren'), button:has-text('Accept all')").first
-                if accept.is_visible(timeout=3_000):
+                accept = page.locator(
+                    "button:has-text('Alle akzeptieren'), button:has-text('Accept all')"
+                ).first
+                if accept.is_visible(timeout=4_000):
                     accept.click()
-                    _sleep()
+                    time.sleep(1.5)
             except Exception:
                 pass
 
-            # Wait for the results feed
+            # Wait for feed
             try:
                 page.wait_for_selector('[role="feed"]', timeout=15_000)
             except Exception:
                 log.warning("maps_feed_not_found", query=query)
                 return results
 
-            # Scroll feed to load more results
-            for _ in range(4):
-                page.evaluate(
-                    'document.querySelector(\'[role="feed"]\')?.scrollBy(0, 600)'
-                )
-                time.sleep(random.uniform(1.0, 1.8))
+            # Scroll to load up to max_results cards (no delay needed — same page)
+            needed = max_results
+            for _ in range(max(4, needed // 5)):
+                page.evaluate('document.querySelector(\'[role="feed"]\')?.scrollBy(0, 800)')
+                time.sleep(0.6)
 
-            # Extract business cards
+            # ── Extract all cards without navigating away ──────────────────────
             cards = page.locator('[role="feed"] .Nv2PK').all()
             if not cards:
                 cards = page.locator('[role="feed"] > div > div').all()
@@ -140,55 +144,53 @@ def search_businesses(
 
             for card in cards[:max_results]:
                 try:
-                    # Name — several selector strategies
+                    # Name: try aria-label on the anchor first, then text content
                     name = ""
-                    for sel in [".qBF1Pd", "a[aria-label]", "[aria-label]"]:
-                        el = card.locator(sel).first
+                    for sel in ["a[aria-label]", ".qBF1Pd", "[aria-label]"]:
                         try:
-                            name = (el.get_attribute("aria-label") or el.inner_text()).strip()
+                            el = card.locator(sel).first
+                            name = (el.get_attribute("aria-label") or el.inner_text(timeout=1_000)).strip()
                             if name:
                                 break
                         except Exception:
                             continue
-
                     if not name:
                         continue
+
+                    # Maps URL: read href from the card anchor — no navigation needed
+                    maps_url = ""
+                    try:
+                        maps_url = card.locator("a[href*='maps']").first.get_attribute("href") or ""
+                    except Exception:
+                        pass
+                    if not maps_url:
+                        maps_url = url  # fallback to search URL
+
+                    place_id = _extract_place_id(maps_url)
 
                     # Rating
                     rating = 0.0
                     try:
-                        rating_el = card.locator(".MW4etd").first
-                        rating = _parse_rating(rating_el.inner_text())
+                        rating = _parse_rating(card.locator(".MW4etd").first.inner_text(timeout=1_000))
                     except Exception:
                         pass
 
                     # Review count
                     review_count = 0
                     try:
-                        count_el = card.locator(".UY7F9").first
-                        review_count = _parse_count(count_el.inner_text())
+                        review_count = _parse_count(card.locator(".UY7F9").first.inner_text(timeout=1_000))
                     except Exception:
                         pass
 
-                    # Maps URL — click card to get canonical URL
-                    try:
-                        card.click()
-                        page.wait_for_load_state("domcontentloaded", timeout=8_000)
-                        time.sleep(random.uniform(1.5, 2.5))
-                        maps_url = page.url
-                    except Exception:
-                        maps_url = url
-                        continue
-
-                    place_id = _extract_place_id(maps_url)
-
-                    # Address
+                    # Address (visible in the card without clicking)
                     address = ""
-                    try:
-                        addr_el = page.locator('button[data-item-id="address"]').first
-                        address = addr_el.inner_text(timeout=3_000).strip()
-                    except Exception:
-                        pass
+                    for sel in [".W4Efsd:nth-child(2)", ".W4Efsd + .W4Efsd", ".Io6YTe"]:
+                        try:
+                            address = card.locator(sel).first.inner_text(timeout=800).strip()
+                            if address:
+                                break
+                        except Exception:
+                            continue
 
                     results.append(BusinessResult(
                         name=name,
@@ -201,16 +203,8 @@ def search_businesses(
                     ))
                     log.info("maps_business_found", name=name, rating=rating, reviews=review_count)
 
-                    # Go back to results list
-                    page.go_back(wait_until="domcontentloaded", timeout=8_000)
-                    _sleep()
-
                 except Exception as e:
                     log.warning("maps_card_extract_failed", error=str(e))
-                    try:
-                        page.go_back(wait_until="domcontentloaded", timeout=8_000)
-                    except Exception:
-                        pass
                     continue
 
         except Exception as e:
