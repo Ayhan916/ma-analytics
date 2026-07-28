@@ -34,7 +34,8 @@ def _get_absa_extractor():
         import warnings
         warnings.filterwarnings("ignore")
         from pyabsa import AspectTermExtraction as ATEPC
-        log.info("absa_model_loading", model="multilingual")
+        log.info("absa_model_loading", model="multilingual",
+                 note="first run downloads ~300MB from pyabsa hub, cached in ~/.cache/pyabsa")
         _absa_extractor = ATEPC.AspectExtractor(
             "multilingual", auto_device=False, cal_perplexity=False
         )

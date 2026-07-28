@@ -85,6 +85,8 @@ OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
 
 > `-P solo` is required on macOS. On Linux (production), remove this flag.
 
+> **ML Model:** The ABSA model (`pyabsa multilingual`) is downloaded automatically on first pipeline run (~300MB, cached in `~/.cache/pyabsa/`). No manual download required.
+
 ### 4. Frontend
 
 ```bash
