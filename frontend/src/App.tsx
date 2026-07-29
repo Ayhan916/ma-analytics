@@ -13,10 +13,6 @@ import { InboxPage } from './pages/InboxPage'
 import { KanbanPage } from './pages/KanbanPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { InnovationLabPage } from './pages/InnovationLabPage'
-import { LocalMarketsPage } from './pages/LocalMarketsPage'
-import { LocalDashboardPage } from './pages/LocalDashboardPage'
-import { BestPracticeLabPage } from './pages/BestPracticeLabPage'
-
 export default function App() {
   return (
     <BrowserRouter>
@@ -34,9 +30,6 @@ export default function App() {
           <Route path="/kanban" element={<ProtectedRoute><KanbanPage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
           <Route path="/innovation" element={<ProtectedRoute><InnovationLabPage /></ProtectedRoute>} />
-          <Route path="/local" element={<ProtectedRoute><LocalMarketsPage /></ProtectedRoute>} />
-          <Route path="/local/dashboard" element={<ProtectedRoute><LocalDashboardPage /></ProtectedRoute>} />
-          <Route path="/local/best-practice" element={<ProtectedRoute><BestPracticeLabPage /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

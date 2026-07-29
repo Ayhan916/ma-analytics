@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.cluster import Cluster, ClusterReview, ClusterType
 from app.models.review import Review
-from app.models.datasource import DataSource
+from app.models.datasource import DataSource, DataSourceType
 from app.models.user import User
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -228,7 +228,7 @@ async def get_competitive(
     from sqlalchemy import text
 
     ds_result = await db.execute(
-        select(DataSource).where(DataSource.user_id == current_user.id)
+        select(DataSource).where(DataSource.user_id == current_user.id, DataSource.type != DataSourceType.google_maps)
     )
     datasources = ds_result.scalars().all()
 

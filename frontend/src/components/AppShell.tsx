@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb, Store } from 'lucide-react'
+import { LayoutDashboard, Database, Inbox, Kanban, Settings, LogOut, ChevronLeft, ChevronRight, Search, Lightbulb } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 interface NavItem { icon: React.ElementType; label: string; to: string }
@@ -12,12 +12,6 @@ const APP_NAV: NavItem[] = [
   { icon: Lightbulb,       label: 'Innovation Lab',to: '/innovation' },
   { icon: Inbox,           label: 'Inbox',         to: '/inbox' },
   { icon: Kanban,          label: 'Kanban',        to: '/kanban' },
-]
-
-const LOCAL_NAV: NavItem[] = [
-  { icon: LayoutDashboard, label: 'Dashboard',        to: '/local/dashboard' },
-  { icon: Store,           label: 'Betriebe',         to: '/local' },
-  { icon: Lightbulb,       label: 'Best Practice Lab',to: '/local/best-practice' },
 ]
 
 function NavSection({ label, collapsed }: { label: string; collapsed: boolean }) {
@@ -74,14 +68,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-2 px-2">
-          <NavSection label="App Analytics" collapsed={collapsed} />
           <div className="space-y-0.5">
             {APP_NAV.map(item => <NavLink key={item.to} item={item} collapsed={collapsed} />)}
-          </div>
-
-          <NavSection label="Lokale Märkte" collapsed={collapsed} />
-          <div className="space-y-0.5">
-            {LOCAL_NAV.map(item => <NavLink key={item.to} item={item} collapsed={collapsed} />)}
           </div>
         </nav>
 

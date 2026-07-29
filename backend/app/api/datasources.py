@@ -216,7 +216,7 @@ async def list_datasources(
 ):
     result = await db.execute(
         select(DataSource)
-        .where(DataSource.user_id == current_user.id)
+        .where(DataSource.user_id == current_user.id, DataSource.type != DataSourceType.google_maps)
         .order_by(desc(DataSource.created_at))
     )
     datasources = result.scalars().all()
